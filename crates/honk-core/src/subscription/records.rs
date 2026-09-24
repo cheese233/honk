@@ -173,11 +173,14 @@ fn normalize_protocol(
     if protocol == "vless" && options.contains("vless_mode") {
         return Err("VLESS vless_mode was removed");
     }
-    consume_record_controls(protocol, &mut options)?;
+    let detour = consume_record_controls(protocol, &mut options)?;
     let mut map = base_mapping(protocol, name, server, port);
     apply_security(&mut map, dialect, protocol, &mut options)?;
     apply_protocol(&mut map, dialect, protocol, positions, &mut options)?;
     apply_udp_options(&mut map, &mut options)?;
+    if let Some(detour) = detour {
+        put_str(&mut map, "detour", &detour);
+    }
     if options.values().any(|value| !is_disabled_wire_value(value)) {
         return Err("record has an unsupported active option");
     }
@@ -190,8 +193,11 @@ fn record_header(field: &Field) -> Option<(&str, &str)> {
     Some((left.trim(), right.get(1..)?.trim()))
 }
 
-fn consume_record_controls(protocol: &str, options: &mut RecordOptions) -> RecordResult<()> {
-    if take_any_active(
+fn consume_record_controls(
+    protocol: &str,
+    options: &mut RecordOptions,
+) -> RecordResult<Option<String>> {
+    let detour = take_raw(
         options,
         &[
             "proxy",
@@ -200,12 +206,12 @@ fn consume_record_controls(protocol: &str, options: &mut RecordOptions) -> Recor
             "dialer-proxy",
             "dialer_proxy",
             "chain",
-            "chained",
-            "proxy-policy",
-            "proxy_policy",
         ],
-    ) {
-        return Err("record chaining is unsupported");
+    )
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty() && !is_disabled_wire_value(value));
+    if take_any_active(options, &["proxy-policy", "proxy_policy"]) {
+        return Err("record chaining policy is unsupported");
     }
     if let Some(value) = take_raw(options, &["mux"]) {
         let enabled = parse_bool(&value).unwrap_or_else(|| !value.eq_ignore_ascii_case("none"));
@@ -226,7 +232,7 @@ fn consume_record_controls(protocol: &str, options: &mut RecordOptions) -> Recor
     if take_any_active(options, &["ssr-protocol", "ssr-protocol-param"]) {
         return Err("record SSR mode is unsupported");
     }
-    Ok(())
+    Ok(detour)
 }
 
 fn apply_udp_options(map: &mut Mapping, options: &mut RecordOptions) -> RecordResult<()> {

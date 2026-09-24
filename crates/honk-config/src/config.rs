@@ -863,7 +863,94 @@ impl Config {
         Ok(())
     }
 
-    /// Validate operator configuration through the legacy error API.
+    /// A node named `detour` must resolve unambiguously, must not form a
+    /// cycle, and must be a protocol whose dial can accept an injected server
+    /// stream. Operator configuration only: subscription-imported chains are
+    /// salvaged per entry and fail closed at dial time instead of rejecting a
+    /// whole provider merge.
+    fn validate_chain_detours(&self, source: &SourceRef) -> Result<(), DetailedConfigError> {
+        let user_nodes = |name: &str| -> Vec<&Node> {
+            self.nodes
+                .iter()
+                .filter(|node| {
+                    node.name == name && node.id != DIRECT_NODE_ID && node.id != BLOCK_NODE_ID
+                })
+                .collect()
+        };
+        for (index, node) in self.nodes.iter().enumerate() {
+            if node.id == DIRECT_NODE_ID || node.id == BLOCK_NODE_ID {
+                continue;
+            }
+            let Some(detour) = node.detour.as_deref() else {
+                continue;
+            };
+            let setting = SettingPath::new("nodes").index(index + 1).field("detour");
+            if let Err(reason) = crate::node::chain_exit_unsupported(node) {
+                return Err(config_validation_error(
+                    source,
+                    setting,
+                    "invalid-chain-exit",
+                    reason,
+                ));
+            }
+            let matches = user_nodes(detour);
+            if matches.len() > 1 {
+                return Err(config_validation_error(
+                    source,
+                    setting,
+                    "ambiguous-chain-target",
+                    "detour target name matches more than one node",
+                ));
+            }
+            let Some(front) = matches.first().copied() else {
+                return Err(config_validation_error(
+                    source,
+                    setting,
+                    "invalid-chain-target",
+                    "detour target is not a declared proxy node",
+                ));
+            };
+            if front.name == node.name {
+                return Err(config_validation_error(
+                    source,
+                    setting,
+                    "invalid-chain-cycle",
+                    "detour target must not be the node itself",
+                ));
+            }
+            let mut seen = std::collections::HashSet::new();
+            seen.insert(node.name.as_str());
+            let mut current = front;
+            loop {
+                if !seen.insert(current.name.as_str()) {
+                    return Err(config_validation_error(
+                        source,
+                        setting,
+                        "invalid-chain-cycle",
+                        "detour chain contains a cycle",
+                    ));
+                }
+                let Some(next) = current.detour.as_deref() else {
+                    break;
+                };
+                let matches = user_nodes(next);
+                if matches.len() > 1 {
+                    return Err(config_validation_error(
+                        source,
+                        setting,
+                        "ambiguous-chain-target",
+                        "detour target name matches more than one node",
+                    ));
+                }
+                match matches.first().copied() {
+                    Some(next) => current = next,
+                    // The dangling target is reported at its own index.
+                    None => break,
+                }
+            }
+        }
+        Ok(())
+    }
     pub fn validate(&self) -> Result<(), crate::ConfigError> {
         self.validate_detailed()
             .map_err(DetailedConfigError::into_legacy)
@@ -875,7 +962,8 @@ impl Config {
         self.validate_globals_detailed(&source)?;
         crate::node::validate_node_collection(&self.nodes)?;
         self.validate_reserved_names_detailed(&source)?;
-        self.validate_references_detailed(&source)
+        self.validate_references_detailed(&source)?;
+        self.validate_chain_detours(&source)
     }
     /// Validate a fully assembled runtime snapshot.
     ///

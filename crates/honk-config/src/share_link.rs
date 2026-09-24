@@ -147,6 +147,11 @@ impl Node {
             source,
             emit,
         )?;
+        node.detour = query
+            .get("detour")
+            .or_else(|| query.get("chain"))
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
         Ok(node)
     }
 }

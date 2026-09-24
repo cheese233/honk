@@ -706,6 +706,12 @@ pub(super) fn parse_clash_proxy(
     apply_stream(mapping, &mut node, udp)?;
     apply_tls(mapping, &mut node, protocol, tls_explicit, tls_enabled)?;
     apply_quic(mapping, &mut node)?;
+    node.detour = optional_text_alias(
+        mapping,
+        &["detour", "dialer-proxy", "dialer_proxy", "underlying-proxy"],
+    )?
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty());
     if let Some(config) = node.vless_mut() {
         config.normalize();
     }

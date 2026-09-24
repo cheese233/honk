@@ -8,7 +8,7 @@ mod vless;
 mod wire;
 
 pub use protocol::*;
-pub use validation::validate_node_collection;
+pub use validation::{chain_exit_unsupported, validate_node_collection};
 pub use vless::*;
 pub use wire::NodeSeed;
 pub(crate) use wire::RawNodeSeed;
@@ -62,6 +62,10 @@ pub struct Node {
     pub host: String,
     pub port: u16,
     pub outbound: OutboundConfig,
+    /// Name of another node used as the front hop: this node reaches its own
+    /// server through that node instead of a direct TCP connect. Resolved and
+    /// cycle-checked by [`crate::Config::validate`]; nil means a direct dial.
+    pub detour: Option<String>,
     pub mark: Option<u32>,
     pub tags: Vec<String>,
     pub subscription_id: Option<uuid::Uuid>,
@@ -83,6 +87,7 @@ impl Default for Node {
             host: String::new(),
             port: 0,
             outbound: OutboundConfig::default(),
+            detour: None,
             mark: None,
             tags: Vec::new(),
             subscription_id: None,
@@ -248,19 +253,27 @@ impl Node {
     }
 
     pub(crate) fn identity_material(&self) -> String {
-        format!(
+        let base = format!(
             "{}|{}|{}|{}|{}",
             self.protocol().as_str(),
             identity_field(self.host()),
             self.port,
             self.outbound.credential_fingerprint(),
             self.outbound.dial_shape_fingerprint()
-        )
+        );
+        // Appending only when a detour exists keeps every legacy node ID
+        // byte-identical; the same server reached through a different front
+        // is a different dial shape.
+        match self.detour.as_deref() {
+            None => base,
+            Some(detour) => format!("{base}|detour:{}", identity_field(detour)),
+        }
     }
 
     /// Content-derived stable identity: UUID v5 over
-    /// `protocol|host|port|credential-fingerprint|dial-shape`.
-    /// Explicit ALPN derives a child UUID from the legacy ID and an ordered JSON list.
+    /// `protocol|host|port|credential-fingerprint|dial-shape`, plus the
+    /// `detour` front name only when one is set. Explicit ALPN derives a
+    /// child UUID from the legacy ID and an ordered JSON list.
     pub fn derive_id(&self) -> uuid::Uuid {
         let material = self.identity_material();
         let legacy_id = uuid::Uuid::new_v5(&NODE_ID_NAMESPACE, material.as_bytes());

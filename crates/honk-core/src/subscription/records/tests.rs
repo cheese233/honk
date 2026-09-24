@@ -43,7 +43,6 @@ fn unsupported_wire_extensions_are_dropped_with_sibling_survival() {
     let nodes = parse_records_subscription(
         "ss=example.com:443,method=aes-128-gcm,password=pwd,udp-relay=true,udp-over-tcp=sp.v2\n\
              ss=example.com:443,method=aes-128-gcm,password=pwd,ssr-protocol=auth_chain_b\n\
-             trojan=example.com:443,password=chained,proxy=upstream\n\
              trojan=example.com:443,password=survivor,tag=survivor",
         None,
     )
@@ -54,6 +53,19 @@ fn unsupported_wire_extensions_are_dropped_with_sibling_survival() {
         nodes[0].trojan().unwrap().password.as_deref(),
         Some("survivor")
     );
+}
+
+#[test]
+fn record_proxy_selects_the_chain_front() {
+    for key in ["proxy", "dialer-proxy", "underlying-proxy", "chain"] {
+        let nodes = parse_records_subscription(
+            &format!("trojan=example.com:443,password=chained,{key}=upstream,tag=exit"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(nodes.len(), 1, "{key}");
+        assert_eq!(nodes[0].detour.as_deref(), Some("upstream"), "{key}");
+    }
 }
 
 #[test]

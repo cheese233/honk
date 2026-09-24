@@ -189,6 +189,8 @@ struct FlatNode {
     #[serde(default)]
     mark: Option<u32>,
     #[serde(default)]
+    detour: Option<String>,
+    #[serde(default)]
     tags: Vec<String>,
     #[serde(default)]
     subscription_id: Option<uuid::Uuid>,
@@ -686,6 +688,11 @@ impl FlatNode {
             host: flat.host,
             port: flat.port,
             outbound,
+            detour: flat
+                .detour
+                .take()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
             mark: flat.mark,
             tags: flat.tags,
             subscription_id: flat.subscription_id,
@@ -762,6 +769,8 @@ struct WireOptions<'a> {
     anytls_idle_session_check_interval: Option<u64>,
     anytls_idle_session_timeout: Option<u64>,
     mark: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detour: Option<&'a str>,
     tags: &'a [String],
     subscription_id: Option<uuid::Uuid>,
     group_id: Option<uuid::Uuid>,
@@ -802,6 +811,7 @@ impl<'a> WireOptions<'a> {
             vless_mode: (node.protocol() != NodeProtocol::VLess).then_some("legacy"),
             transport: "tcp",
             mark: node.mark,
+            detour: node.detour.as_deref(),
             tags: &node.tags,
             subscription_id: node.subscription_id,
             group_id: node.group_id,

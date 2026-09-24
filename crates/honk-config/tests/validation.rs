@@ -608,3 +608,191 @@ mod share_link_security {
         assert!(!shadowrocket.tls().unwrap().enabled);
     }
 }
+
+mod chain_detour {
+    use honk_config::Config;
+    use honk_config::node::Node;
+
+    fn socks5(name: &str, port: u16) -> Node {
+        Node::from_share_link(&format!("socks5://127.0.0.1:{port}#{name}")).unwrap()
+    }
+
+    fn with_detour(mut node: Node, target: &str) -> Node {
+        node.detour = Some(target.to_string());
+        node.id = node.derive_id();
+        node
+    }
+
+    fn code(config: &Config) -> &'static str {
+        config.validate_detailed().unwrap_err().diagnostic.code
+    }
+
+    #[test]
+    fn share_link_query_selects_the_front_node() {
+        for query in ["detour=front", "chain=front"] {
+            let node =
+                Node::from_share_link(&format!("socks5://127.0.0.1:1080?{query}#exit")).unwrap();
+            assert_eq!(node.detour.as_deref(), Some("front"), "{query}");
+        }
+        let plain = Node::from_share_link("socks5://127.0.0.1:1080#exit").unwrap();
+        assert_eq!(plain.detour, None);
+    }
+
+    #[test]
+    fn dae_node_section_parses_and_validates_a_chain() {
+        let mut diagnostics = Vec::new();
+        let config = honk_config::parser::parse_dae_config_with_detailed_diagnostics(
+            "node {\n front: 'socks5://127.0.0.1:1080'\n exit: 'trojan://secret@edge.example:443?detour=front'\n}\n",
+            &mut diagnostics,
+        )
+        .unwrap();
+        config.validate().unwrap();
+        let exit = config
+            .nodes
+            .iter()
+            .find(|node| node.name == "exit")
+            .expect("exit node");
+        assert_eq!(exit.detour.as_deref(), Some("front"));
+    }
+
+    #[test]
+    fn detour_changes_identity_only_when_set() {
+        let plain = socks5("exit", 1080);
+        assert_eq!(plain.id, plain.derive_id());
+        let chained = with_detour(plain.clone(), "front");
+        assert_ne!(plain.derive_id(), chained.derive_id());
+    }
+
+    #[test]
+    fn valid_chain_assembles() {
+        let front = socks5("front", 1081);
+        let exit = with_detour(socks5("exit", 1082), "front");
+        Config {
+            nodes: vec![front, exit],
+            ..Default::default()
+        }
+        .validate()
+        .unwrap();
+    }
+
+    #[test]
+    fn unknown_target_is_rejected() {
+        let exit = with_detour(socks5("exit", 1082), "missing");
+        let config = Config {
+            nodes: vec![exit],
+            ..Default::default()
+        };
+        assert_eq!(code(&config), "invalid-chain-target");
+    }
+
+    #[test]
+    fn self_and_two_node_cycles_are_rejected() {
+        let config = Config {
+            nodes: vec![with_detour(socks5("a", 1081), "a")],
+            ..Default::default()
+        };
+        assert_eq!(code(&config), "invalid-chain-cycle");
+
+        let config = Config {
+            nodes: vec![
+                with_detour(socks5("a", 1081), "b"),
+                with_detour(socks5("b", 1082), "a"),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(code(&config), "invalid-chain-cycle");
+    }
+
+    #[test]
+    fn duplicate_front_names_are_rejected() {
+        let mut duplicate = socks5("other", 1083);
+        duplicate.name = "front".into();
+        let config = Config {
+            nodes: vec![
+                socks5("front", 1081),
+                duplicate,
+                with_detour(socks5("exit", 1082), "front"),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(code(&config), "ambiguous-chain-target");
+    }
+
+    #[test]
+    fn protocols_that_cannot_accept_a_stream_are_rejected_as_exits() {
+        for link in [
+            "hysteria2://secret@example.com:443#hy2",
+            "tuic://00000000-0000-0000-0000-000000000001:pass@example.com:443#tuic",
+            "juicity://00000000-0000-0000-0000-000000000001:pass@example.com:443#juicity",
+            "anytls://secret@example.com:443#anytls",
+            "ss://YWVzLTI1Ni1nY206cGFzcw@1.2.3.4:8388#ss",
+            "vless://00000000-0000-0000-0000-000000000001@example.com:443?flow=xtls-rprx-vision&security=tls#vision",
+        ] {
+            let mut node = Node::from_share_link(link).unwrap();
+            node.detour = Some("front".into());
+            node.id = node.derive_id();
+            let config = Config {
+                nodes: vec![socks5("front", 1081), node],
+                ..Default::default()
+            };
+            assert_eq!(code(&config), "invalid-chain-exit", "{link}");
+        }
+    }
+
+    #[test]
+    fn wire_serialization_round_trips_detour() {
+        let chained = with_detour(socks5("exit", 1082), "front");
+        let json = serde_json::to_string(&chained).unwrap();
+        assert!(json.contains("\"detour\":\"front\""), "{json}");
+        let back: Node = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.detour.as_deref(), Some("front"));
+
+        let plain = socks5("exit", 1082);
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("detour"), "{json}");
+    }
+
+    #[test]
+    fn reality_and_builtin_fronts_are_rejected() {
+        let mut reality = Node::from_share_link(
+            "vless://00000000-0000-0000-0000-000000000001@example.com:443?security=reality&pbk=public-key",
+        )
+        .unwrap();
+        reality.detour = Some("front".into());
+        reality.id = reality.derive_id();
+        let config = Config {
+            nodes: vec![socks5("front", 1081), reality],
+            ..Default::default()
+        };
+        assert_eq!(code(&config), "invalid-chain-exit");
+
+        let builtin = with_detour(socks5("exit", 1082), "direct");
+        let config = Config {
+            nodes: vec![builtin],
+            ..Default::default()
+        };
+        assert_eq!(code(&config), "invalid-chain-target");
+    }
+
+    #[test]
+    fn multi_hop_chain_is_accepted_and_a_dangling_mid_hop_is_not_a_cycle() {
+        let config = Config {
+            nodes: vec![
+                with_detour(socks5("a", 1081), "b"),
+                with_detour(socks5("b", 1082), "c"),
+                socks5("c", 1083),
+            ],
+            ..Default::default()
+        };
+        config.validate().unwrap();
+
+        let config = Config {
+            nodes: vec![
+                with_detour(socks5("a", 1081), "b"),
+                with_detour(socks5("b", 1082), "missing"),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(code(&config), "invalid-chain-target");
+    }
+}

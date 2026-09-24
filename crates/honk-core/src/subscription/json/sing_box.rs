@@ -39,12 +39,22 @@ pub(super) fn normalize(value: Value) -> NodeResult {
     if protocol == NodeProtocol::VLess && source.contains_key("vless_mode") {
         return Err("VLESS vless_mode was removed");
     }
-    if source.remove("detour").is_some_and(|value| active(&value)) {
-        return Err("sing-box detour chaining is unsupported");
-    }
+    let detour = match source.remove("detour") {
+        Some(value) if active(&value) => Some(
+            value
+                .as_str()
+                .filter(|tag| !tag.is_empty())
+                .ok_or("sing-box detour must be a non-empty tag string")?
+                .to_string(),
+        ),
+        _ => None,
+    };
 
     let mut proxy = Mapping::new();
     put(&mut proxy, "type", Value::String(protocol.as_str().into()));
+    if let Some(detour) = detour {
+        put(&mut proxy, "detour", Value::String(detour));
+    }
     move_strings(
         &mut source,
         &mut proxy,
