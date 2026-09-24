@@ -493,8 +493,9 @@ async fn detoured_non_chainable_node_is_refused_before_dialing() {
     let registry = ProxyRegistry::default_resolver().unwrap();
     for link in [
         "ss://YWVzLTI1Ni1nY206cGFzcw@127.0.0.1:1#ss",
-        "anytls://secret@127.0.0.1:1#anytls",
         "hysteria2://secret@127.0.0.1:1#hy2",
+        "tuic://00000000-0000-0000-0000-000000000001:pass@127.0.0.1:1#tuic",
+        "juicity://00000000-0000-0000-0000-000000000001:pass@127.0.0.1:1#juicity",
     ] {
         let mut node = Node::from_share_link(link).unwrap();
         node.detour = Some("front".into());

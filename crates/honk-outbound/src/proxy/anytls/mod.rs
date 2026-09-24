@@ -1300,10 +1300,6 @@ async fn connect_transport(
 ) -> anyhow::Result<(BoxedReader, BoxedWriter, Vec<u8>)> {
     let password = node.anytls().unwrap().password.as_deref().unwrap_or("");
     let auth = authentication_payload(password, padding);
-    let tcp = crate::util::connect_outbound(addr, connect_timeout).await?;
-    let tcp = crate::transport_quality::tcp::ObservedTcp::new(tcp);
-    debug!("AnyTLS: TCP connected to {}", addr);
-
     let connector = match tls_connector {
         Some(connector) => connector,
         None => Arc::new(crate::tls::build_connector(node)?),
@@ -1315,16 +1311,52 @@ async fn connect_transport(
         .sni
         .clone()
         .unwrap_or_else(|| node.host().to_string());
-    let mut tls = tokio::time::timeout(connect_timeout, connector.connect(&server_name, tcp))
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!("AnyTLS TLS handshake timed out after {connect_timeout:?}")
-        })??;
-    tls.get_mut().activate();
-    debug!("AnyTLS: TLS handshake completed with {}", addr);
-    let (read, write) = tokio::io::split(crate::tls::BatchRead::new(tls));
+    let (read, write): (BoxedReader, BoxedWriter) =
+        match crate::chain::connect_server(node, connect_timeout).await? {
+            crate::chain::ServerStream::Direct(tcp) => {
+                let tcp = crate::transport_quality::tcp::ObservedTcp::new(tcp);
+                debug!("AnyTLS: TCP connected to {}", addr);
+                let mut tls = anytls_tls_handshake(
+                    Arc::clone(&connector),
+                    &server_name,
+                    tcp,
+                    connect_timeout,
+                )
+                .await?;
+                tls.get_mut().activate();
+                debug!("AnyTLS: TLS handshake completed with {}", addr);
+                let (read, write) = tokio::io::split(crate::tls::BatchRead::new(tls));
+                (Box::new(read), Box::new(write))
+            }
+            crate::chain::ServerStream::DialProxy(stream) => {
+                let tls = anytls_tls_handshake(
+                    Arc::clone(&connector),
+                    &server_name,
+                    stream,
+                    connect_timeout,
+                )
+                .await?;
+                let (read, write) = tokio::io::split(crate::tls::BatchRead::new(tls));
+                (Box::new(read), Box::new(write))
+            }
+        };
 
-    Ok((Box::new(read), Box::new(write), auth))
+    Ok((read, write, auth))
+}
+
+/// TLS handshake over any connected server stream, direct or dial-proxied.
+async fn anytls_tls_handshake<S>(
+    connector: Arc<TlsConnector>,
+    server_name: &str,
+    server: S,
+    connect_timeout: Duration,
+) -> anyhow::Result<crate::tls::TlsStream<S>>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    tokio::time::timeout(connect_timeout, connector.connect(server_name, server))
+        .await
+        .map_err(|_| anyhow::anyhow!("AnyTLS TLS handshake timed out after {connect_timeout:?}"))?
 }
 
 impl AnyTlsHandler {

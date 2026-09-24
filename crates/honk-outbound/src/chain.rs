@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use honk_config::node::Node;
+use tokio::net::TcpStream;
 
 use crate::proxy::{AsyncReadWrite, ProxyRegistry, ProxyStream};
 use crate::runtime::OutboundRuntimeRegistry;
@@ -75,14 +76,29 @@ pub fn is_chained(node: &Node) -> bool {
     node.detour.is_some()
 }
 
-/// Connect to `node`'s own server endpoint through its front hop.
+/// A connected stream to a node's own server, before its protocol handshake.
 ///
-/// Only valid for a node with a detour; direct dials keep their concrete
-/// `ObservedTcp` path. The returned stream is owned by the caller.
+/// Direct dials stay a concrete [`TcpStream`] so transport telemetry
+/// (`ObservedTcp`, TCP pressure) and the pool behave exactly as before; a
+/// chained dial yields the front's tunneled stream instead.
+#[derive(Debug)]
+pub enum ServerStream {
+    Direct(TcpStream),
+    DialProxy(Box<dyn AsyncReadWrite>),
+}
+
+/// Connect to `node`'s own server endpoint, through its dial-proxy front when
+/// it declares one. This is the single server-connect every TCP outbound uses.
 pub async fn connect_server(
     node: &Node,
     connect_timeout: Duration,
-) -> anyhow::Result<Box<dyn AsyncReadWrite>> {
+) -> anyhow::Result<ServerStream> {
+    if node.detour.is_none() {
+        let addr = format!("{}:{}", node.host(), node.port);
+        return Ok(ServerStream::Direct(
+            crate::util::connect_outbound(&addr, connect_timeout).await?,
+        ));
+    }
     let front_name = node
         .detour
         .as_deref()
@@ -115,7 +131,7 @@ pub async fn connect_server(
             .await
     })
     .await?;
-    Ok(proxy.stream)
+    Ok(ServerStream::DialProxy(proxy.stream))
 }
 
 /// Resolve the front node's stable id inside `generation`. A duplicated

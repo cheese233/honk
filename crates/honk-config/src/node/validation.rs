@@ -299,8 +299,9 @@ pub fn chain_exit_unsupported(node: &Node) -> Result<(), &'static str> {
         | crate::types::NodeProtocol::Juicity => {
             Err("QUIC outbounds cannot be chained; their connection is owned by the QUIC client")
         }
-        crate::types::NodeProtocol::AnyTLS => Err("AnyTLS chaining is not supported yet"),
-        crate::types::NodeProtocol::SS => Err("Shadowsocks chaining is not supported yet"),
+        crate::types::NodeProtocol::SS => {
+            Err("Shadowsocks chaining is not supported yet (its inline codec owns the TCP split)")
+        }
         crate::types::NodeProtocol::Direct | crate::types::NodeProtocol::Block => {
             Err("built-in nodes cannot be chained")
         }

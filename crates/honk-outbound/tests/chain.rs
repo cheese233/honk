@@ -158,3 +158,37 @@ async fn chained_dial_without_a_generation_fails_closed() {
         .expect_err("a chained dial outside a runtime generation must not connect");
     assert!(error.to_string().contains("runtime generation"), "{error}");
 }
+
+/// The dae `exit -> front` surface produces a tagged exit plus an internal
+/// front, and that pair dials through the front end to end.
+#[tokio::test]
+async fn dae_arrow_chain_dials_through_the_front() {
+    let echo = echo_server().await;
+    let (exit_addr, exit_seen) = socks5_server().await;
+    let (front_addr, front_seen) = socks5_server().await;
+
+    let chain = Node::from_share_link_chain(&format!(
+        "socks5://127.0.0.1:{}#exit -> socks5://127.0.0.1:{}#front",
+        exit_addr.port(),
+        front_addr.port()
+    ))
+    .expect("dae chain parses");
+    assert_eq!(chain.len(), 2);
+    assert!(!chain[0].internal && chain[1].internal);
+    assert_eq!(chain[0].detour.as_deref(), Some(chain[1].name.as_str()));
+
+    let generation = Arc::new(OutboundRuntimeRegistry::build(&chain).expect("valid generation"));
+    let registry = ProxyRegistry::default_resolver().unwrap();
+    let proxy = registry
+        .dial_runtime(generation, chain[0].id, echo, None, Duration::from_secs(5))
+        .await
+        .expect("dae-chained dial must succeed");
+
+    let mut stream: Box<dyn AsyncReadWrite> = proxy.stream;
+    stream.write_all(b"pong").await.unwrap();
+    let mut buf = [0u8; 4];
+    stream.read_exact(&mut buf).await.unwrap();
+    assert_eq!(&buf, b"pong");
+    assert!(front_seen.lock().unwrap().contains(&exit_addr.to_string()));
+    assert!(exit_seen.lock().unwrap().contains(&echo.to_string()));
+}

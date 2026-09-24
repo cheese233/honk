@@ -86,23 +86,24 @@ pub(crate) async fn maybe_tls_wrap_concrete(
     if !tls.alpn.is_empty() {
         node.validate_protocol()?;
     }
-    if crate::chain::is_chained(node) {
-        return chained_server_stream(node, tcp, connect_timeout).await;
-    }
     let cold = tcp.is_none();
-    let initial_tcp = async {
+    // Kept lazy: REALITY's setup deadline must also cover the initial dial and
+    // its admission wait.
+    let initial = async {
         match tcp {
-            Some(tcp) => Ok(tcp),
-            None => {
-                let addr = format!("{}:{}", node.host(), node.port);
-                crate::util::connect_outbound(&addr, connect_timeout).await
-            }
+            Some(tcp) => Ok(crate::chain::ServerStream::Direct(tcp)),
+            None => crate::chain::connect_server(node, connect_timeout).await,
         }
     };
     if let Some(reality) = crate::reality::parse_reality_config(node)? {
         let deadline = tokio::time::Instant::now() + connect_timeout * 3;
         let setup = async {
-            let tcp = initial_tcp.await?;
+            let tcp = match initial.await? {
+                crate::chain::ServerStream::Direct(tcp) => tcp,
+                crate::chain::ServerStream::DialProxy(stream) => {
+                    return chained_server_stream(node, stream, connect_timeout).await;
+                }
+            };
             let peer = tcp.peer_addr()?;
             let tcp = ObservedTcp::new(tcp);
             let chrome = crate::tls::chrome_mode();
@@ -149,7 +150,12 @@ pub(crate) async fn maybe_tls_wrap_concrete(
                 std::io::Error::new(std::io::ErrorKind::TimedOut, "REALITY setup timeout")
             })?;
     }
-    let mut tcp = ObservedTcp::new(initial_tcp.await?);
+    let mut tcp = ObservedTcp::new(match initial.await? {
+        crate::chain::ServerStream::Direct(tcp) => tcp,
+        crate::chain::ServerStream::DialProxy(stream) => {
+            return chained_server_stream(node, stream, connect_timeout).await;
+        }
+    });
     if tls.enabled {
         let connector = crate::tls::build_connector(node)?;
         let server_name = tls.sni.clone().unwrap_or_else(|| node.host().to_string());
@@ -161,24 +167,17 @@ pub(crate) async fn maybe_tls_wrap_concrete(
     Ok(MaybeTls::Plain(Box::new(tcp)))
 }
 
-/// Server stream for a chained node: connected through its front hop, then
-/// wrapped exactly like a direct dial. There is no `ObservedTcp` because the
-/// underlying socket belongs to the front's own generation-pinned dial.
+/// Server stream for a chained node: already connected through its front hop,
+/// then wrapped exactly like a direct dial. There is no `ObservedTcp` because
+/// the underlying socket belongs to the front's own generation-pinned dial.
 async fn chained_server_stream(
     node: &Node,
-    tcp: Option<TcpStream>,
-    connect_timeout: std::time::Duration,
+    stream: Box<dyn AsyncReadWrite>,
+    _connect_timeout: std::time::Duration,
 ) -> anyhow::Result<MaybeTls> {
-    if tcp.is_some() {
-        anyhow::bail!(
-            "node '{}': a chained dial cannot reuse a pooled server socket",
-            node.name
-        );
-    }
     if crate::reality::parse_reality_config(node)?.is_some() {
         anyhow::bail!("node '{}': REALITY cannot be chained", node.name);
     }
-    let stream = crate::chain::connect_server(node, connect_timeout).await?;
     let tls = node.tls().unwrap();
     if tls.enabled {
         let connector = crate::tls::build_connector(node)?;

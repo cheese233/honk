@@ -537,27 +537,27 @@ impl TcpOutbound for Socks5Handler {
         connect_timeout: std::time::Duration,
     ) -> anyhow::Result<ProxyStream> {
         let config = node.socks5().unwrap();
-        if node.detour.is_some() {
-            let mut stream = crate::chain::connect_server(node, connect_timeout).await?;
-            Self::handshake(
-                &mut stream,
-                target,
-                target_domain,
-                config.username.as_deref(),
-                config.password.as_deref(),
-            )
-            .await?;
-            return Ok(ProxyStream {
-                stream,
-                target_addr: target,
-                target_domain: target_domain.map(|s| s.to_string()),
-            });
+        match crate::chain::connect_server(node, connect_timeout).await? {
+            crate::chain::ServerStream::Direct(stream) => {
+                self.dial_with_tcp(node, target, target_domain, stream, connect_timeout)
+                    .await
+            }
+            crate::chain::ServerStream::DialProxy(mut stream) => {
+                Self::handshake(
+                    &mut stream,
+                    target,
+                    target_domain,
+                    config.username.as_deref(),
+                    config.password.as_deref(),
+                )
+                .await?;
+                Ok(ProxyStream {
+                    stream,
+                    target_addr: target,
+                    target_domain: target_domain.map(|s| s.to_string()),
+                })
+            }
         }
-        let addr = format!("{}:{}", node.host(), node.port);
-        debug!("SOCKS5: connecting to {} for target {}", addr, target);
-        let stream = crate::util::connect_outbound(&addr, connect_timeout).await?;
-        self.dial_with_tcp(node, target, target_domain, stream, connect_timeout)
-            .await
     }
 
     async fn dial_with_tcp(
