@@ -476,5 +476,5 @@ mod packet_transport;
 
 pub use packet_transport::{
     PacketTransportEndpoint, packet_transport_endpoint, packet_transport_endpoint_with_metrics,
-    quic_handshake_probe,
+    packet_transport_endpoint_with_obfs, quic_handshake_probe,
 };

@@ -159,6 +159,16 @@ async fn chained_dial_without_a_generation_fails_closed() {
     assert!(error.to_string().contains("runtime generation"), "{error}");
 }
 
+#[tokio::test]
+async fn chained_udp_dial_without_a_generation_fails_closed() {
+    let exit = chained_node("exit", 1, "front");
+    let error = match chain::connect_udp_via_front(&exit, Duration::from_secs(1)).await {
+        Ok(_) => panic!("a chained UDP dial outside a runtime generation must not connect"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("runtime generation"), "{error}");
+}
+
 /// The dae `exit -> front` surface produces a tagged exit plus an internal
 /// front, and that pair dials through the front end to end.
 #[tokio::test]
@@ -191,4 +201,125 @@ async fn dae_arrow_chain_dials_through_the_front() {
     assert_eq!(&buf, b"pong");
     assert!(front_seen.lock().unwrap().contains(&exit_addr.to_string()));
     assert!(exit_seen.lock().unwrap().contains(&echo.to_string()));
+}
+
+/// A server that accepts and discards, for exits whose handshake needs no
+/// reply (Shadowsocks' request is write-only at dial time).
+async fn tcp_sink_server() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = stream.read(&mut buf).await {
+                    if n == 0 {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    addr
+}
+
+#[tokio::test]
+async fn shadowsocks_exit_dials_through_the_front() {
+    let exit_addr = tcp_sink_server().await;
+    let (front_addr, front_seen) = socks5_server().await;
+    let front = socks5_node("front", front_addr.port());
+    let mut exit = Node::from_share_link(&format!(
+        "ss://YWVzLTI1Ni1nY206cGFzcw@127.0.0.1:{}#ss",
+        exit_addr.port()
+    ))
+    .unwrap();
+    exit.detour = Some("front".into());
+    exit.id = exit.derive_id();
+
+    let generation = Arc::new(OutboundRuntimeRegistry::build(&[front, exit.clone()]).unwrap());
+    let registry = ProxyRegistry::default_resolver().unwrap();
+    let target: SocketAddr = "127.0.0.1:9".parse().unwrap();
+    let dial = registry.dial_runtime(generation, exit.id, target, None, Duration::from_secs(5));
+    tokio::time::timeout(Duration::from_secs(10), dial)
+        .await
+        .expect("Shadowsocks chained dial must not hang")
+        .expect("Shadowsocks exit must chain through the front");
+    assert!(
+        front_seen.lock().unwrap().contains(&exit_addr.to_string()),
+        "front must relay to the SS server: {:?}",
+        front_seen.lock().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn direct_front_is_a_direct_dial() {
+    let echo = echo_server().await;
+    let (exit_addr, exit_seen) = socks5_server().await;
+    let direct = honk_config::config::Config::builtin_direct_node();
+    let exit = chained_node("exit", exit_addr.port(), "direct");
+    let generation = Arc::new(OutboundRuntimeRegistry::build(&[direct, exit.clone()]).unwrap());
+    let registry = ProxyRegistry::default_resolver().unwrap();
+
+    let proxy = registry
+        .dial_runtime(generation, exit.id, echo, None, Duration::from_secs(5))
+        .await
+        .expect("a direct front dials the exit server directly");
+    let mut stream: Box<dyn AsyncReadWrite> = proxy.stream;
+    stream.write_all(b"direct").await.unwrap();
+    let mut buf = [0u8; 6];
+    stream.read_exact(&mut buf).await.unwrap();
+    assert_eq!(&buf, b"direct");
+    assert!(exit_seen.lock().unwrap().contains(&echo.to_string()));
+}
+
+#[tokio::test]
+async fn block_front_fails_the_server_connection() {
+    let block = honk_config::config::Config::builtin_block_node();
+    let exit = chained_node("exit", 1, "block");
+    let generation = Arc::new(OutboundRuntimeRegistry::build(&[block, exit.clone()]).unwrap());
+    let registry = ProxyRegistry::default_resolver().unwrap();
+    let error = registry
+        .dial_runtime(
+            generation,
+            exit.id,
+            "127.0.0.1:9".parse().unwrap(),
+            None,
+            Duration::from_secs(1),
+        )
+        .await
+        .expect_err("a block front must not connect");
+    assert!(!error.to_string().is_empty());
+}
+
+struct FrontGroupResolver {
+    leaf: Node,
+}
+
+impl chain::GroupFrontResolver for FrontGroupResolver {
+    fn resolve_tcp_leaf(&self, group: &str) -> Option<Node> {
+        (group == "front-group").then(|| self.leaf.clone())
+    }
+}
+
+#[tokio::test]
+async fn group_front_resolves_to_its_leaf() {
+    let echo = echo_server().await;
+    let (exit_addr, _exit_seen) = socks5_server().await;
+    let (front_addr, front_seen) = socks5_server().await;
+    let front = socks5_node("front", front_addr.port());
+    chain::install_group_resolver(Arc::new(FrontGroupResolver {
+        leaf: front.clone(),
+    }));
+    let exit = chained_node("exit", exit_addr.port(), "front-group");
+    let generation = Arc::new(OutboundRuntimeRegistry::build(&[front, exit.clone()]).unwrap());
+    let registry = ProxyRegistry::default_resolver().unwrap();
+
+    registry
+        .dial_runtime(generation, exit.id, echo, None, Duration::from_secs(5))
+        .await
+        .expect("a group front must resolve its leaf");
+    assert!(front_seen.lock().unwrap().contains(&exit_addr.to_string()));
 }

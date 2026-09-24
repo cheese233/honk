@@ -31,6 +31,14 @@ impl TcpPressure {
     }
 
     pub(crate) fn observe(&mut self, socket: &TcpStream) {
+        use std::os::fd::AsRawFd;
+        self.observe_fd(socket.as_raw_fd());
+    }
+
+    /// Observe a socket by raw descriptor. Callers that split a socket into
+    /// halves (the Shadowsocks inline codec) keep it valid for the halves'
+    /// lifetime, so a stored descriptor stays bound to the same socket.
+    pub(crate) fn observe_fd(&mut self, fd: std::os::fd::RawFd) {
         let Some(sampler) = self.sampler.as_mut() else {
             return;
         };
@@ -46,7 +54,7 @@ impl TcpPressure {
             return;
         }
         self.last_sample = Some(now);
-        sampler.observe(read_sample(socket, now));
+        sampler.observe(read_sample_fd(fd, now));
     }
 }
 
@@ -159,24 +167,22 @@ fn unknown_sample(at: Instant) -> CarrierSample {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn read_sample(_socket: &TcpStream, at: Instant) -> CarrierSample {
+fn read_sample_fd(_fd: std::os::fd::RawFd, at: Instant) -> CarrierSample {
     unknown_sample(at)
 }
 
 #[cfg(target_os = "linux")]
-fn read_sample(socket: &TcpStream, at: Instant) -> CarrierSample {
-    use std::os::fd::{AsFd, AsRawFd};
-
+fn read_sample_fd(fd: std::os::fd::RawFd, at: Instant) -> CarrierSample {
     // SAFETY: tcp_info is a C integer-only struct with a valid zero value. The
-    // borrowed fd cannot outlive this synchronous call or race owner teardown.
+    // caller guarantees the descriptor is live for this synchronous call and
+    // does not race owner teardown.
     let mut info: libc::tcp_info = unsafe { std::mem::zeroed() };
     let mut length = std::mem::size_of_val(&info) as libc::socklen_t;
-    let fd = socket.as_fd();
     // SAFETY: both writable pointers cover their declared sizes, getsockopt
-    // respects the supplied capacity, and no pointer or fd escapes this call.
+    // respects the supplied capacity, and no pointer escapes this call.
     let result = unsafe {
         libc::getsockopt(
-            fd.as_raw_fd(),
+            fd,
             libc::IPPROTO_TCP,
             libc::TCP_INFO,
             (&mut info as *mut libc::tcp_info).cast(),

@@ -334,7 +334,7 @@ impl ShadowsocksHandler {
         &self,
         method: &str,
         password: &str,
-        server: TcpStream,
+        server: Box<dyn super::AsyncReadWrite>,
         header: Vec<u8>,
         target: SocketAddr,
         target_domain: Option<&str>,
@@ -400,9 +400,11 @@ impl TcpOutbound for ShadowsocksHandler {
             CipherConf::for_method(method)?;
         }
 
-        let addr = format!("{}:{}", node.host(), node.port);
-        debug!("Shadowsocks: connecting to {} for target {}", addr, target);
-        let server = crate::util::connect_outbound(&addr, connect_timeout).await?;
+        let server: Box<dyn super::AsyncReadWrite> =
+            match crate::chain::connect_server(node, connect_timeout).await? {
+                crate::chain::ServerStream::Direct(tcp) => Box::new(tcp),
+                crate::chain::ServerStream::DialProxy(stream) => stream,
+            };
 
         let header = addr::encode_address(target, target_domain)?;
         self.start_relay(method, password, server, header, target, target_domain)
@@ -421,8 +423,15 @@ impl TcpOutbound for ShadowsocksHandler {
         let method = config.encryption.as_deref().unwrap_or("aes-128-gcm");
         let password = config.password.as_deref().unwrap_or("");
         let header = addr::encode_address(target, target_domain)?;
-        self.start_relay(method, password, server, header, target, target_domain)
-            .await
+        self.start_relay(
+            method,
+            password,
+            Box::new(server),
+            header,
+            target,
+            target_domain,
+        )
+        .await
     }
 }
 

@@ -404,9 +404,9 @@ node {
 
 `->` 的每一侧都是分享链接，与 dae 完全一致：`exit: 'trojan://... -> socks5://... -> socks5://...'` 会先经第一个 SOCKS5 跳、再经第二个抵达 Trojan 服务器。被 tag 的节点是出口；每个前置跳都会成为内部节点（内容派生名称 `chain-<id>`），不参与组候选，也不会出现在 Clash API 与 `honk-tool` 中。共享同一前置链接的两条链会复用同一个前置节点。
 
-扁平结构化模型、sing-box `outbounds[].detour` 以及记录式键 `proxy`、`dialer-proxy`、`underlying-proxy`、`chain` 通过名称引用一个已声明节点，而不是链接。目标必须唯一解析到一个已声明的代理节点；组、`direct`、`block` 或重名节点都会被拒绝，操作者校验还会拒绝未知目标、自引用与环。前置节点自身也可以带 `detour`。
+扁平结构化模型、sing-box `outbounds[].detour` 以及记录式键 `proxy`、`dialer-proxy`、`underlying-proxy`、`chain` 通过名称引用一个已声明节点，而不是链接。目标必须唯一解析到一个已声明的节点、组或内置节点：组在拨号时解析为其当前 TCP 叶子，`direct` 表示直连，`block` 表示阻断出口的服务器连接；重名节点或环会被拒绝。前置节点自身也可以带 `detour`。
 
-可作为出口（其拨号能接受前置传入的服务器流）的协议是 SOCKS5、Trojan、VMess、不带 Vision 的 VLESS 与 AnyTLS。REALITY、VLESS Vision、Shadowsocks（其内联编解码器持有具体 TCP 拆分）以及 QUIC 出站（Hysteria2/TUIC/Juicity，持有 UDP 连接）不能作为出口。任意 TCP 代理节点都可作为前置。
+所有 TCP 代理协议都可作为出口：SOCKS5、Shadowsocks（legacy 与 2022）、Trojan、VMess、VLESS（含 Vision、REALITY 与 Encryption）与 AnyTLS 都通过同一个 `connect` 抵达服务器——它返回直连 TCP socket 或前置隧道流。QUIC 出站（Hysteria2、TUIC、Juicity）同样可以链式：其 quinn endpoint 建立在前置的 framed UDP transport 之上，因此前置必须支持 UDP。唯一被拒绝的链式场景是内置出口（`direct`/`block`）以及 Hysteria2 端口跳跃——后者需要逐包目的地址，固定中继的前置 UDP transport 无法提供；Hysteria2 的 salamander 密码在 UDP adapter 内应用，可以正常链式。
 
 链式节点不会使用连接池或预热会话，会被预连接跳过，并从 UDP 组候选中排除；经链式节点发起的 UDP 请求会按失败关闭处理，而不会绕过前置。出口服务器的域名会在本地经 bootstrap 解析，同时作为 domain 请求交给前置。前置链接通过其节点 ID 参与出口身份，因此更换前置会改变出口节点的延迟缓存键。在没有运行时 generation 的场景（例如 `honk-tool sub`）链式拨号会失败关闭，而不是直连。
 

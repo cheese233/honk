@@ -490,10 +490,26 @@ impl TuicHandler {
             ..Default::default()
         };
         let config = crate::quic::client_config(node, &alpn, options).await?;
-        Ok(Arc::new(TuicClient {
-            quic: QuicClient::new(node.host().to_string(), node.port, server_name, config)
+        let mtu = tuic.quic.mtu.unwrap_or(1252);
+        let quic = if crate::chain::is_chained(node) {
+            let (endpoint, remote) = crate::chain::connect_quic_via_front(
+                node,
+                crate::chain::CHAIN_QUIC_DIAL_TIMEOUT,
+                None,
+            )
+            .await?;
+            let factory = Arc::clone(&endpoint);
+            QuicClient::new(remote.ip().to_string(), remote.port(), server_name, config)
                 .with_flow_control_profiles(profiles)
-                .with_max_udp_payload_size(tuic.quic.mtu.unwrap_or(1252)),
+                .with_max_udp_payload_size(mtu)
+                .with_endpoint_factory(move |_| Ok(factory.endpoint().clone()))
+        } else {
+            QuicClient::new(node.host().to_string(), node.port, server_name, config)
+                .with_flow_control_profiles(profiles)
+                .with_max_udp_payload_size(mtu)
+        };
+        Ok(Arc::new(TuicClient {
+            quic,
             uuid: *uuid.as_bytes(),
             password,
         }))

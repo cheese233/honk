@@ -762,13 +762,15 @@ mod chain_detour {
     }
 
     #[test]
-    fn protocols_that_cannot_accept_a_stream_are_rejected_as_exits() {
+    fn stream_and_quic_protocols_can_be_chained_exits() {
         for link in [
             "hysteria2://secret@example.com:443#hy2",
             "tuic://00000000-0000-0000-0000-000000000001:pass@example.com:443#tuic",
             "juicity://00000000-0000-0000-0000-000000000001:pass@example.com:443#juicity",
             "ss://YWVzLTI1Ni1nY206cGFzcw@1.2.3.4:8388#ss",
+            "anytls://secret@example.com:443#anytls",
             "vless://00000000-0000-0000-0000-000000000001@example.com:443?flow=xtls-rprx-vision&security=tls#vision",
+            "vless://00000000-0000-0000-0000-000000000001@example.com:443?security=reality&pbk=public-key#reality",
         ] {
             let mut node = Node::from_share_link(link).unwrap();
             node.detour = Some("front".into());
@@ -777,8 +779,24 @@ mod chain_detour {
                 nodes: vec![socks5("front", 1081), node],
                 ..Default::default()
             };
-            assert_eq!(code(&config), "invalid-chain-exit", "{link}");
+            config
+                .validate()
+                .unwrap_or_else(|error| panic!("{link}: {error:?}"));
         }
+    }
+
+    #[test]
+    fn hysteria2_port_hopping_cannot_be_chained() {
+        let mut hy2 =
+            Node::from_share_link("hysteria2://secret@example.com:443?mport=20000-30000#hy2")
+                .unwrap();
+        hy2.detour = Some("front".into());
+        hy2.id = hy2.derive_id();
+        let config = Config {
+            nodes: vec![socks5("front", 1081), hy2],
+            ..Default::default()
+        };
+        assert_eq!(code(&config), "unsupported-chain-hop");
     }
 
     #[test]
@@ -795,25 +813,36 @@ mod chain_detour {
     }
 
     #[test]
-    fn reality_and_builtin_fronts_are_rejected() {
-        let mut reality = Node::from_share_link(
-            "vless://00000000-0000-0000-0000-000000000001@example.com:443?security=reality&pbk=public-key",
-        )
-        .unwrap();
-        reality.detour = Some("front".into());
-        reality.id = reality.derive_id();
-        let config = Config {
-            nodes: vec![socks5("front", 1081), reality],
-            ..Default::default()
-        };
-        assert_eq!(code(&config), "invalid-chain-exit");
+    fn builtin_fronts_are_allowed() {
+        // `direct` is a direct dial and `block` blocks the server connection;
+        // both are valid fronts.
+        for target in ["direct", "block"] {
+            let exit = with_detour(socks5("exit", 1082), target);
+            Config {
+                nodes: vec![exit],
+                ..Default::default()
+            }
+            .validate()
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+        }
+    }
 
-        let builtin = with_detour(socks5("exit", 1082), "direct");
-        let config = Config {
-            nodes: vec![builtin],
+    #[test]
+    fn group_fronts_are_allowed() {
+        let member = socks5("member", 1081);
+        let exit = with_detour(socks5("exit", 1082), "front-group");
+        let group = honk_config::group::Group {
+            name: "front-group".into(),
+            nodes: vec![member.id],
             ..Default::default()
         };
-        assert_eq!(code(&config), "invalid-chain-target");
+        Config {
+            nodes: vec![member, exit],
+            groups: vec![group],
+            ..Default::default()
+        }
+        .validate()
+        .unwrap();
     }
 
     #[test]

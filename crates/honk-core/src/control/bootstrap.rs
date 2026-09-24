@@ -1,5 +1,30 @@
 use super::*;
 
+/// Resolves a group named as a chain front to its current TCP leaf.
+struct ChainGroupResolver {
+    group_manager: honk_outbound::group::SharedGroupManager,
+}
+
+impl honk_outbound::chain::GroupFrontResolver for ChainGroupResolver {
+    fn resolve_tcp_leaf(&self, group: &str) -> Option<honk_config::node::Node> {
+        let manager = self.group_manager.read().clone();
+        manager.get_group_policy(group)?;
+        let context = honk_outbound::group::ScoreSelectionContext {
+            network: honk_outbound::group::SelectionNetwork::Tcp,
+            probe_domain: honk_outbound::alive::ProbeDomain::Tcp,
+            target_family: None,
+            health_family: honk_outbound::alive::IpVersion::V4,
+            target: None,
+        };
+        manager
+            .selection_plan_for_target_with_health_fallback(group, &context)
+            .entries
+            .into_iter()
+            .next()
+            .map(|entry| entry.node.clone())
+    }
+}
+
 impl ControlPlane {
     pub fn new(
         config: Config,
@@ -108,6 +133,9 @@ impl ControlPlane {
         // they currently select, and the tag keeps the result. The cell
         // keeps working across reloads (the manager inside is swapped).
         let group_manager = group_manager.into_shared();
+        honk_outbound::chain::install_group_resolver(std::sync::Arc::new(ChainGroupResolver {
+            group_manager: group_manager.clone(),
+        }));
         {
             let group_manager = group_manager.clone();
             alive_set.set_score_feedback_factory(move |node_id, context| {

@@ -126,7 +126,7 @@ fn salamander_key(password: &[u8], salt: &[u8; SALAMANDER_SALT_LEN]) -> [u8; 32]
     blake2b256(&input)
 }
 
-fn salamander_seal_into(password: &[u8], data: &[u8], out: &mut Vec<u8>) {
+pub(crate) fn salamander_seal_into(password: &[u8], data: &[u8], out: &mut Vec<u8>) {
     out.resize(SALAMANDER_SALT_LEN + data.len(), 0);
     rand::rng().fill_bytes(&mut out[..SALAMANDER_SALT_LEN]);
     let salt: [u8; SALAMANDER_SALT_LEN] = out[..SALAMANDER_SALT_LEN]
@@ -149,7 +149,7 @@ pub(super) fn salamander_seal(password: &[u8], data: &[u8]) -> Vec<u8> {
 
 /// Decrypt a datagram in place, returning the payload length (the salt is
 /// compacted away), or `None` for malformed packets (`salamander.go:42-55`).
-pub(super) fn salamander_open(password: &[u8], buf: &mut [u8]) -> Option<usize> {
+pub(crate) fn salamander_open(password: &[u8], buf: &mut [u8]) -> Option<usize> {
     if buf.len() <= SALAMANDER_SALT_LEN {
         return None;
     }

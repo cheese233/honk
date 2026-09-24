@@ -36,13 +36,16 @@ impl DirectRead for ObservedTcp {
     }
 }
 
-impl DirectRead for tokio_boring::SslStream<ObservedTcp> {
+impl<S: DirectRead + Unpin> DirectRead for tokio_boring::SslStream<S> {
     fn poll_direct_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Option<Poll<io::Result<()>>> {
-        Some(Pin::new(self.get_mut().get_mut()).poll_read(cx, buf))
+        // Concrete raw-TCP inner streams keep the Vision direct switch; a
+        // boxed dial-proxied inner returns `None`, so Vision reads normally.
+        let inner = self.get_mut().get_mut();
+        Pin::new(inner).poll_direct_read(cx, buf)
     }
 }
 

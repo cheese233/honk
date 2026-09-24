@@ -76,7 +76,7 @@ const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
 const CONN_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 
 mod h3;
-mod salamander;
+pub(crate) mod salamander;
 #[cfg(test)]
 mod tests;
 mod wire;
@@ -601,17 +601,34 @@ impl Hysteria2Handler {
             },
         )
         .await?;
-        let quic = QuicClient::new(node.host().to_string(), node.port, server_name, config)
-            .with_flow_control_profiles(profiles);
         let mtu = hy2.quic.mtu.unwrap_or(1252);
-        let quic = quic.with_max_udp_payload_size(mtu);
-        let quic = match (obfs, hop) {
-            (None, None) => quic,
-            (obfs, hop) => quic.with_endpoint_factory(hy2_endpoint_factory(
+        let quic = if crate::chain::is_chained(node) {
+            if hop.is_some() {
+                anyhow::bail!("Hysteria2: port hopping cannot be chained through a dial-proxy");
+            }
+            let (endpoint, remote) = crate::chain::connect_quic_via_front(
+                node,
+                crate::chain::CHAIN_QUIC_DIAL_TIMEOUT,
                 obfs.map(|p| Arc::from(p.as_bytes())),
-                hop,
-                mtu,
-            )),
+            )
+            .await?;
+            let factory = Arc::clone(&endpoint);
+            QuicClient::new(remote.ip().to_string(), remote.port(), server_name, config)
+                .with_flow_control_profiles(profiles)
+                .with_max_udp_payload_size(mtu)
+                .with_endpoint_factory(move |_| Ok(factory.endpoint().clone()))
+        } else {
+            let quic = QuicClient::new(node.host().to_string(), node.port, server_name, config)
+                .with_flow_control_profiles(profiles)
+                .with_max_udp_payload_size(mtu);
+            match (obfs, hop) {
+                (None, None) => quic,
+                (obfs, hop) => quic.with_endpoint_factory(hy2_endpoint_factory(
+                    obfs.map(|p| Arc::from(p.as_bytes())),
+                    hop,
+                    mtu,
+                )),
+            }
         };
         Ok(Arc::new(Hy2Client {
             quic,

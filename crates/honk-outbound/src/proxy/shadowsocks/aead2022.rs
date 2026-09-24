@@ -25,7 +25,6 @@
 use rand::Rng;
 use rand::RngExt;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
 use tracing::debug;
 
 use super::{AeadCipher, increment_nonce};
@@ -292,7 +291,7 @@ impl SlidingWindow {
 /// reading it inline would deadlock against servers that only answer after
 /// the first client payload chunk.
 pub(crate) async fn dial_stream(
-    mut server: TcpStream,
+    mut server: Box<dyn crate::proxy::AsyncReadWrite>,
     method: Ss2022Method,
     socks_header: Vec<u8>,
 ) -> anyhow::Result<super::stream::SsStream> {

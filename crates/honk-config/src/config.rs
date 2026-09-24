@@ -877,6 +877,11 @@ impl Config {
                 })
                 .collect()
         };
+        let group_names: std::collections::HashSet<&str> = self
+            .groups
+            .iter()
+            .map(|group| group.name.as_str())
+            .collect();
         for (index, node) in self.nodes.iter().enumerate() {
             if node.id == DIRECT_NODE_ID || node.id == BLOCK_NODE_ID {
                 continue;
@@ -893,6 +898,27 @@ impl Config {
                     reason,
                 ));
             }
+            // Port hopping needs a per-datagram destination the fixed-relay
+            // front UDP transport cannot provide.
+            if node
+                .hysteria2()
+                .is_some_and(|hy2| hy2.port_hopping.is_some())
+            {
+                return Err(config_validation_error(
+                    source,
+                    setting,
+                    "unsupported-chain-hop",
+                    "Hysteria2 port hopping cannot be chained through a dial-proxy",
+                ));
+            }
+            // `direct`/`block` are valid fronts (a direct dial and a blocked
+            // server connection), and a group is resolved dynamically at dial
+            // time, so neither can be walked statically.
+            if matches!(detour, Self::BUILTIN_DIRECT_NODE | Self::BUILTIN_BLOCK_NODE)
+                || group_names.contains(detour)
+            {
+                continue;
+            }
             let matches = user_nodes(detour);
             if matches.len() > 1 {
                 return Err(config_validation_error(
@@ -907,7 +933,7 @@ impl Config {
                     source,
                     setting,
                     "invalid-chain-target",
-                    "detour target is not a declared proxy node",
+                    "detour target is not a declared node, group, or builtin",
                 ));
             };
             if front.name == node.name {
@@ -933,6 +959,11 @@ impl Config {
                 let Some(next) = current.detour.as_deref() else {
                     break;
                 };
+                if matches!(next, Self::BUILTIN_DIRECT_NODE | Self::BUILTIN_BLOCK_NODE)
+                    || group_names.contains(next)
+                {
+                    break;
+                }
                 let matches = user_nodes(next);
                 if matches.len() > 1 {
                     return Err(config_validation_error(

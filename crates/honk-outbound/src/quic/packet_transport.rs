@@ -96,13 +96,14 @@ struct TransportQuinnSocket {
 impl TransportQuinnSocket {
     #[cfg(test)]
     fn new(transport: Arc<dyn PacketTransport>, remote: SocketAddr) -> Arc<Self> {
-        Self::new_with_metrics(transport, remote, false)
+        Self::new_with_metrics(transport, remote, false, None)
     }
 
     fn new_with_metrics(
         transport: Arc<dyn PacketTransport>,
         remote: SocketAddr,
         metrics_enabled: bool,
+        obfs: Option<Arc<[u8]>>,
     ) -> Arc<Self> {
         let (outbound_tx, mut outbound_rx) =
             tokio::sync::mpsc::channel::<QueuedTransportPacket>(TRANSPORT_QUEUE_CAP);
@@ -114,8 +115,10 @@ impl TransportQuinnSocket {
             let transport = Arc::clone(&transport);
             let send_error = Arc::clone(&send_error);
             let recv_waker = Arc::clone(&recv_waker);
+            let obfs = obfs.clone();
             async move {
                 let mut first_datagram = true;
+                let mut seal_buf = Vec::with_capacity(2048);
                 while let Some(queued) = outbound_rx.recv().await {
                     if queued.enqueued_at.elapsed() >= TRANSPORT_PACKET_MAX_AGE {
                         if metrics_enabled {
@@ -124,17 +127,28 @@ impl TransportQuinnSocket {
                         continue;
                     }
                     let first = first_datagram;
-                    let data = queued.data;
+                    let payload: &[u8] = match &obfs {
+                        Some(password) => {
+                            crate::proxy::hysteria2::salamander::salamander_seal_into(
+                                password,
+                                &queued.data,
+                                &mut seal_buf,
+                            );
+                            &seal_buf
+                        }
+                        None => &queued.data,
+                    };
                     let timeout = transport.send_timeout().max(Duration::from_millis(1));
                     let attempt = QuicSendAttempt::new(transport.as_ref());
                     let result = tokio::time::timeout(timeout, async {
                         if first {
-                            transport.send_packet_confirmed(&data).await
+                            transport.send_packet_confirmed(payload).await
                         } else {
-                            transport.send_packet(&data).await
+                            transport.send_packet(payload).await
                         }
                     })
                     .await;
+                    seal_buf.clear();
                     let timed_out = match &result {
                         Err(_) => true,
                         Ok(Err(error)) => error.kind() == io::ErrorKind::TimedOut,
@@ -181,6 +195,7 @@ impl TransportQuinnSocket {
         let receiver = tokio::spawn({
             let recv_error = Arc::clone(&recv_error);
             let recv_waker = Arc::clone(&recv_waker);
+            let obfs = obfs.clone();
             async move {
                 let mut buf = vec![0u8; 65536];
                 loop {
@@ -198,6 +213,23 @@ impl TransportQuinnSocket {
                     if source != remote && !allows_full_cone_replies {
                         continue;
                     }
+                    let n = match &obfs {
+                        Some(password) => {
+                            match crate::proxy::hysteria2::salamander::salamander_open(
+                                password,
+                                &mut buf[..n],
+                            ) {
+                                Some(len) => len,
+                                None => {
+                                    if metrics_enabled {
+                                        record_transport_rx_drop();
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+                        None => n,
+                    };
                     if n > buf.len() {
                         *recv_error.lock() = Some(TransportIoError::fatal(io::Error::new(
                             io::ErrorKind::InvalidData,
@@ -498,6 +530,17 @@ pub fn packet_transport_endpoint_with_metrics(
     remote: SocketAddr,
     metrics_enabled: bool,
 ) -> io::Result<PacketTransportEndpoint> {
+    packet_transport_endpoint_with_obfs(transport, remote, None, metrics_enabled)
+}
+
+/// Peer an obfuscated QUIC node (hysteria2 salamander) with a framed UDP front
+/// transport: the transform is applied inside the adapter, above the tunnel.
+pub fn packet_transport_endpoint_with_obfs(
+    transport: Arc<dyn PacketTransport>,
+    remote: SocketAddr,
+    obfs: Option<Arc<[u8]>>,
+    metrics_enabled: bool,
+) -> io::Result<PacketTransportEndpoint> {
     if transport.relay_addr() != remote {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -506,7 +549,7 @@ pub fn packet_transport_endpoint_with_metrics(
     }
     let runtime = quinn::default_runtime()
         .ok_or_else(|| io::Error::other("no async runtime available for QUIC"))?;
-    let socket = TransportQuinnSocket::new_with_metrics(transport, remote, metrics_enabled);
+    let socket = TransportQuinnSocket::new_with_metrics(transport, remote, metrics_enabled, obfs);
     let endpoint = Endpoint::new_with_abstract_socket(
         endpoint_config_with_mtu(1252)?,
         None,
@@ -961,5 +1004,97 @@ mod probe_tests {
         .await
         .unwrap();
         server_task.await.unwrap();
+    }
+
+    #[derive(Debug)]
+    struct CapturePacketTransport {
+        remote: SocketAddr,
+        sent: SyncMutex<Vec<Vec<u8>>>,
+        reply: SyncMutex<Option<Vec<u8>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl PacketTransport for CapturePacketTransport {
+        fn relay_addr(&self) -> SocketAddr {
+            self.remote
+        }
+
+        async fn send_packet(&self, data: &[u8]) -> io::Result<()> {
+            self.sent.lock().push(data.to_vec());
+            Ok(())
+        }
+
+        async fn recv_packet(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+            let Some(packet) = self.reply.lock().take() else {
+                return std::future::pending().await;
+            };
+            let len = packet.len().min(buf.len());
+            buf[..len].copy_from_slice(&packet[..len]);
+            Ok((len, self.remote))
+        }
+    }
+
+    /// A chained hysteria2 node's salamander transform is applied inside the
+    /// transport adapter: outbound datagrams are sealed, inbound opened.
+    #[tokio::test]
+    async fn obfs_transport_seals_outbound_and_opens_inbound() {
+        use crate::proxy::hysteria2::salamander::{salamander_open, salamander_seal_into};
+
+        let remote: SocketAddr = "127.0.0.1:443".parse().unwrap();
+        let password: Arc<[u8]> = Arc::from(b"salamander".as_slice());
+        // Pre-seed the inbound datagram: the adapter's receiver task starts with
+        // the socket and would otherwise park on a pending receive.
+        let mut sealed_reply = Vec::new();
+        salamander_seal_into(&password, b"reply", &mut sealed_reply);
+        let transport = Arc::new(CapturePacketTransport {
+            remote,
+            sent: SyncMutex::new(Vec::new()),
+            reply: SyncMutex::new(Some(sealed_reply)),
+        });
+        let socket = TransportQuinnSocket::new_with_metrics(
+            transport.clone(),
+            remote,
+            false,
+            Some(Arc::clone(&password)),
+        );
+        let transmit = quinn::udp::Transmit {
+            destination: remote,
+            ecn: None,
+            contents: b"plaintext",
+            segment_size: None,
+            src_ip: None,
+        };
+        quinn::AsyncUdpSocket::try_send(&*socket, &transmit).unwrap();
+        for _ in 0..200 {
+            if !transport.sent.lock().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let sealed = transport
+            .sent
+            .lock()
+            .first()
+            .cloned()
+            .expect("adapter must forward a datagram");
+        assert_ne!(sealed, b"plaintext".to_vec());
+        let mut opened = sealed.clone();
+        let opened_len = salamander_open(&password, &mut opened).expect("sealed datagram");
+        assert_eq!(&opened[..opened_len], b"plaintext");
+
+        let mut data = [0u8; 64];
+        let mut meta = [quinn::udp::RecvMeta::default()];
+        let received = tokio::time::timeout(
+            Duration::from_secs(1),
+            std::future::poll_fn(|cx| {
+                let mut bufs = [std::io::IoSliceMut::new(&mut data)];
+                quinn::AsyncUdpSocket::poll_recv(&*socket, cx, &mut bufs, &mut meta)
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(received, 1);
+        assert_eq!(&data[..meta[0].len], b"reply");
     }
 }

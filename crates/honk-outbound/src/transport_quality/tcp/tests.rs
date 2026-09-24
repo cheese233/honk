@@ -69,7 +69,10 @@ async fn observed_tcp_loopback_preserves_cancelled_reads_payload_and_half_close(
         observed.flush().await.unwrap();
         peer.read_exact(&mut output).await.unwrap();
         assert_eq!(output, [17; 8192]);
-        let sample = read_sample(&observed.inner, Instant::now());
+        let sample = read_sample_fd(
+            std::os::fd::AsRawFd::as_raw_fd(&observed.inner),
+            Instant::now(),
+        );
         assert!(sample.rtt.is_some_and(|rtt| !rtt.is_zero()));
         assert!(sample.rx_bytes.is_none_or(|bytes| bytes >= 8192));
         assert!(sample.tx_bytes.is_none_or(|bytes| bytes >= 8192));

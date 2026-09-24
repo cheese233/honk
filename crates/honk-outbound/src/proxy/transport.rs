@@ -63,6 +63,7 @@ pub(crate) async fn maybe_tls_wrap(
         MaybeTls::Tls(stream) => Ok(Box::new(crate::tls::BatchRead::new(stream))),
         MaybeTls::Plain(stream) => Ok(stream),
         MaybeTls::Chained(stream) => Ok(stream),
+        MaybeTls::ChainedTls(stream) => Ok(Box::new(crate::tls::BatchRead::new(stream))),
     }
 }
 
@@ -72,9 +73,11 @@ pub(crate) async fn maybe_tls_wrap(
 pub(crate) enum MaybeTls {
     Tls(crate::tls::TlsStream<ObservedTcp>),
     Plain(Box<ObservedTcp>),
-    /// Already connected to the server through a front hop. There is no
-    /// `ObservedTcp` here: the socket belongs to the front's own dial.
+    /// Already connected to the server through a front hop: plaintext, or TLS
+    /// over the front's tunneled stream. Neither carries `ObservedTcp`, because
+    /// the socket belongs to the front's own dial.
     Chained(Box<dyn AsyncReadWrite>),
+    ChainedTls(crate::tls::TlsStream<Box<dyn AsyncReadWrite>>),
 }
 
 pub(crate) async fn maybe_tls_wrap_concrete(
@@ -173,19 +176,54 @@ pub(crate) async fn maybe_tls_wrap_concrete(
 async fn chained_server_stream(
     node: &Node,
     stream: Box<dyn AsyncReadWrite>,
-    _connect_timeout: std::time::Duration,
+    connect_timeout: std::time::Duration,
 ) -> anyhow::Result<MaybeTls> {
-    if crate::reality::parse_reality_config(node)?.is_some() {
-        anyhow::bail!("node '{}': REALITY cannot be chained", node.name);
+    if let Some(reality) = crate::reality::parse_reality_config(node)? {
+        let deadline = tokio::time::Instant::now() + connect_timeout * 3;
+        let setup = async {
+            let chrome = crate::tls::chrome_mode();
+            match crate::reality::reality_connect_with_key_shares(stream, &reality, chrome, true)
+                .await
+            {
+                Ok(tls) => Ok(tls),
+                // The masked handshake consumed the front connection; re-dial
+                // through the same front and retry once.
+                Err(error) if error.is::<crate::reality::RealityMaskCertificate>() => {
+                    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                    if remaining.is_zero() {
+                        return Err(anyhow::anyhow!("REALITY setup timeout"));
+                    }
+                    let replacement =
+                        match crate::chain::connect_server(node, connect_timeout.min(remaining))
+                            .await?
+                        {
+                            crate::chain::ServerStream::Direct(tcp) => {
+                                Box::new(tcp) as Box<dyn AsyncReadWrite>
+                            }
+                            crate::chain::ServerStream::DialProxy(stream) => stream,
+                        };
+                    crate::reality::reality_connect_with_key_shares(
+                        replacement,
+                        &reality,
+                        chrome,
+                        false,
+                    )
+                    .await
+                }
+                Err(error) => Err(error),
+            }
+        };
+        let tls = tokio::time::timeout_at(deadline, setup)
+            .await
+            .map_err(|_| anyhow::anyhow!("REALITY setup timeout"))??;
+        return Ok(MaybeTls::ChainedTls(tls));
     }
     let tls = node.tls().unwrap();
     if tls.enabled {
         let connector = crate::tls::build_connector(node)?;
         let server_name = tls.sni.clone().unwrap_or_else(|| node.host().to_string());
         let tls_stream = connector.connect(&server_name, stream).await?;
-        return Ok(MaybeTls::Chained(Box::new(crate::tls::BatchRead::new(
-            tls_stream,
-        ))));
+        return Ok(MaybeTls::ChainedTls(tls_stream));
     }
     Ok(MaybeTls::Chained(stream))
 }

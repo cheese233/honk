@@ -36,11 +36,15 @@ impl VLessHandler {
                         }
                         Box::new(VisionStream::new(ResponseHeaderStrip::new(tls), uuid))
                     }
-                    crate::proxy::transport::MaybeTls::Plain(_) => {
-                        anyhow::bail!("unencrypted VLESS Vision requires TLS or REALITY");
+                    crate::proxy::transport::MaybeTls::ChainedTls(tls) => {
+                        if tls.ssl().version2() != Some(boring::ssl::SslVersion::TLS1_3) {
+                            anyhow::bail!("VLESS Vision requires negotiated TLS 1.3");
+                        }
+                        Box::new(VisionStream::new(ResponseHeaderStrip::new(tls), uuid))
                     }
-                    crate::proxy::transport::MaybeTls::Chained(_) => {
-                        anyhow::bail!("VLESS Vision cannot be chained");
+                    crate::proxy::transport::MaybeTls::Plain(_)
+                    | crate::proxy::transport::MaybeTls::Chained(_) => {
+                        anyhow::bail!("unencrypted VLESS Vision requires TLS or REALITY");
                     }
                 };
             return Ok(match permit {

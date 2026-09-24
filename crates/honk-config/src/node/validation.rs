@@ -279,42 +279,17 @@ pub fn validate_node_collection(nodes: &[Node]) -> Result<(), DetailedConfigErro
     Ok(())
 }
 
-/// Whether a node's dial can accept a server stream supplied by a chain front.
+/// Whether a node can be the exit of a chain.
 ///
-/// `Ok(())` means the exit is chainable; `Err` carries the safe rejection
-/// reason. Runtime dialing consults this so a chain declared outside the
-/// operator validator (a subscription, a bare share link, or a hand-built
-/// node) fails closed instead of connecting directly.
+/// `Ok(())` means the exit is chainable (every proxy protocol is); `Err`
+/// carries the safe rejection reason for the built-ins. Runtime dialing
+/// consults this so a chain declared outside the operator validator (a
+/// subscription, a bare share link, or a hand-built node) fails closed
+/// instead of connecting directly.
 pub fn chain_exit_unsupported(node: &Node) -> Result<(), &'static str> {
-    if let Some(tls) = node.tls() {
-        match tls.effective_reality_public_key() {
-            Ok(Some(_)) => return Err("REALITY cannot be chained"),
-            Ok(None) => {}
-            Err(_) => return Err("REALITY intent needs a valid public key before chaining"),
-        }
-    }
     match node.protocol() {
-        crate::types::NodeProtocol::Hysteria2
-        | crate::types::NodeProtocol::Tuic
-        | crate::types::NodeProtocol::Juicity => {
-            Err("QUIC outbounds cannot be chained; their connection is owned by the QUIC client")
-        }
-        crate::types::NodeProtocol::SS => {
-            Err("Shadowsocks chaining is not supported yet (its inline codec owns the TCP split)")
-        }
         crate::types::NodeProtocol::Direct | crate::types::NodeProtocol::Block => {
             Err("built-in nodes cannot be chained")
-        }
-        crate::types::NodeProtocol::VLess => {
-            if node
-                .vless()
-                .expect("VLESS node carries VLESS config")
-                .is_vision()
-            {
-                Err("VLESS Vision cannot be chained")
-            } else {
-                Ok(())
-            }
         }
         _ => Ok(()),
     }
