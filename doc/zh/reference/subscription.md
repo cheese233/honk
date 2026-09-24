@@ -194,7 +194,7 @@ VLESS 字段会在派生节点身份前应用：
 
 SIP008 version 1/2 wrapper（`{"servers":[...]}`）及裸服务器数组会导入 Shadowsocks 的 `server`、`server_port`、`method`、`password` 和 `remarks`。空插件字段不会导致拒绝；有效的插件配置仍不受支持。
 
-sing-box 配置从 `outbounds` 导入受支持的 Shadowsocks、SOCKS5、VMess、VLESS、Trojan、Hysteria2、TUIC、Juicity 和 AnyTLS 条目。结构性 `selector`、`urltest`、`direct`、`block` 与 `dns` 条目不是代理节点。TLS/SNI、REALITY、WebSocket/gRPC、VLESS packet 选择和受支持的协议调优会通过共同的节点构建逻辑规范化。未启用 H2MUX/UoT wrapper 且没有显式 `packet_encoding` 选择其他路径时，sing-box VLESS 条目特定地默认使用 Single XUDP 并允许 UDP；这是 sing-box 导入默认值，不是 Auto 的全局含义。gRPC service name 为空或省略时保留 sing-box 的空 service，不套用 honk 的 `GunService` 默认值。Hysteria2 可以只提供 `server_ports`，以第一个跳跃端口作为名义端点。非空 `detour` 会导入为该节点的链式前置（见[节点参考](./nodes.md#出站链式代理detour)）。不支持的 wire 功能和认证要求不会被静默丢弃。每节点 uTLS 指纹提示不会覆盖 honk 的进程级 TLS 设置。
+sing-box 配置从 `outbounds` 导入受支持的 Shadowsocks、SOCKS5、VMess、VLESS、Trojan、Hysteria2、TUIC、Juicity 和 AnyTLS 条目。结构性 `selector`、`urltest`、`direct`、`block` 与 `dns` 条目不是代理节点。TLS/SNI、REALITY、WebSocket/gRPC、VLESS packet 选择和受支持的协议调优会通过共同的节点构建逻辑规范化。未启用 H2MUX/UoT wrapper 且没有显式 `packet_encoding` 选择其他路径时，sing-box VLESS 条目特定地默认使用 Single XUDP 并允许 UDP；这是 sing-box 导入默认值，不是 Auto 的全局含义。gRPC service name 为空或省略时保留 sing-box 的空 service，不套用 honk 的 `GunService` 默认值。Hysteria2 可以只提供 `server_ports`，以第一个跳跃端口作为名义端点。非空 `detour` 会导入为该节点的链式前置；分享链接列表中的 `exit -> front -> ...` 条目会导入每一跳（见[节点参考](./nodes.md#出站链式代理exit---front)）。不支持的 wire 功能和认证要求不会被静默丢弃。每节点 uTLS 指纹提示不会覆盖 honk 的进程级 TLS 设置。
 
 在 sing-box 输入中，`network` 表示数据包网络能力，不是流传输类型；`transport.type` 选择流传输方式。`h2` 等不支持的名称会使条目被拒绝，不会被当作裸 TCP。
 

@@ -93,7 +93,7 @@ The Node model exposes the fields below. Share links populate operator-facing fi
 | `anytls_idle_session_check_interval` | u64? | null | Parsed `idle_session_check_interval` seconds; current runtime janitor cadence remains fixed at 30 s |
 | `anytls_idle_session_timeout` | u64? | null | Idle eviction from `idle_session_timeout`; effective default 30 s |
 | `mark` | u32? | null | Structured-model outbound `SO_MARK`; not a dae share-link query |
-| `detour` | string? | null | Front node name; this node reaches its own server through it. See [Outbound chaining](#outbound-chaining-detour) |
+| `detour` | string? | null | Front node name. Populated from a dae `exit -> front` chain (front hops are internal nodes) or set by name through the structured/importer surfaces. See [Outbound chaining](#outbound-chaining-exit---front) |
 | `tags` | string[] | `[]` | Classification metadata; not a dae share-link query |
 | `subscription_id` / `group_id` | UUID? | null | Import/runtime ownership metadata |
 | `created_at` / `updated_at` | datetime | now | Runtime metadata |
@@ -391,24 +391,26 @@ A static config offers real ECH and ECH rejection fails the handshake closed. Di
 | `juicity://` | Juicity userinfo and shared QUIC/TLS queries |
 | `socks5://` | SOCKS userinfo; `socks4://` and `socks4a://` are accepted into the same node protocol |
 
-For a chain written as `a -> b`, only `a` is parsed; use the explicit `detour=` query to chain. Automatic names come only from a decoded `#fragment`, VMess `ps`, or `{scheme}-{host}`; the parser never uses the raw URI or userinfo as a fallback, so credentials do not leak into generated names. Explicit tags, fragments, and `ps` values remain user-controlled.
+For a chain written as `exit -> front -> ...`, every hop is parsed: the left node is the exit and each node to its right is the dial-proxy that reaches it, matching dae's `NewNetproxyDialerFromLink`. Automatic names come only from a decoded `#fragment`, VMess `ps`, or `{scheme}-{host}`; the parser never uses the raw URI or userinfo as a fallback, so credentials do not leak into generated names. Explicit tags, fragments, and `ps` values remain user-controlled.
 
-## Outbound chaining (`detour`)
+## Outbound chaining (`exit -> front`)
 
-A node can reach its own server through another node instead of a direct TCP connect. The front node is named by the exit's `detour`:
+A node can reach its own server through one or more front nodes instead of a direct TCP connect. The dae arrow form lists the exit first and its dial-proxy hops after it:
 
 ```dae
 node {
     front: 'socks5://10.0.0.1:1080'
-    exit: 'trojan://secret@edge.example:443?detour=front'
+    exit: 'trojan://secret@edge.example:443 -> front'
 }
 ```
 
-The share-link query accepts `detour=` or `chain=`; the flat/structured model accepts `detour`; sing-box `outbounds[].detour` and record keys `proxy`, `dialer-proxy`, `underlying-proxy`, and `chain` map to the same field. The value must resolve to exactly one declared proxy node; a group, `direct`, `block`, or a duplicated node name is rejected, and the operator validator also rejects an unknown target, a self-reference, or a cycle. A front may itself have a detour.
+Every side of `->` is a share link, exactly as in dae: `exit: 'trojan://... -> socks5://... -> socks5://...'` reaches the Trojan server through the first SOCKS5 hop and then the second. The tagged node is the exit; each front hop becomes an internal node with a content-derived name (`chain-<id>`), is not a group candidate, and is hidden from the Clash API and `honk-tool`. Two chains that share the same front link share one front node.
 
-Supported exits — a node whose dial can accept a server stream from the front — are SOCKS5, Trojan, VMess, and VLESS without Vision. REALITY, VLESS Vision, Shadowsocks, AnyTLS, and the QUIC outbounds (Hysteria2/TUIC/Juicity) are rejected as exits, because their dial owns the physical connection or needs the raw socket. Any proxy node can be a front.
+The structured flat model, sing-box `outbounds[].detour`, and record keys `proxy`, `dialer-proxy`, `underlying-proxy`, and `chain` name an already-declared node instead of a link. The target must resolve to exactly one declared proxy node; a group, `direct`, `block`, or a duplicated node name is rejected, and the operator validator also rejects an unknown target, a self-reference, or a cycle. A front may itself have a detour.
 
-Chained nodes never use the connection pool or warm sessions, are skipped by preconnect, and are excluded from UDP group eligibility; a UDP request through a chained node fails closed rather than bypassing the front. The exit server's hostname is resolved locally through the bootstrap resolver and also passed to the front as a domain request. The `detour` name participates in the node's identity, so renaming a front changes the exit's ID and its delay-cache key. A chained dial outside a runtime generation (for example `honk-tool sub`) fails closed instead of connecting directly.
+Supported exits — a node whose dial can accept a server stream from the front — are SOCKS5, Trojan, VMess, VLESS without Vision, and AnyTLS. REALITY, VLESS Vision, Shadowsocks (its inline codec owns the concrete TCP split), and the QUIC outbounds (Hysteria2/TUIC/Juicity, which own a UDP connection) are rejected as exits. Any TCP proxy node can be a front.
+
+Chained nodes never use the connection pool or warm sessions, are skipped by preconnect, and are excluded from UDP group eligibility; a UDP request through a chained node fails closed rather than bypassing the front. The exit server's hostname is resolved locally through the bootstrap resolver and also passed to the front as a domain request. The front link participates in the exit's identity through its node ID, so changing a front changes the exit's delay-cache key. A chained dial outside a runtime generation (for example `honk-tool sub`) fails closed instead of connecting directly.
 
 ## Related docs
 
