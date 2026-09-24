@@ -17,7 +17,7 @@ impl GroupManager {
         if matches!(domain, ProbeDomain::DataUdp | ProbeDomain::DnsUdp)
             && let Some(node) = self.nodes.get(&node_id)
             && node.protocol() != honk_config::types::NodeProtocol::Block
-            && !(crate::descriptor::descriptor(node.protocol()).supports_udp)(node)
+            && !crate::descriptor::descriptor(node.protocol()).allows_udp(node)
         {
             return false;
         }

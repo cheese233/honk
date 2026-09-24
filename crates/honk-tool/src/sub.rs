@@ -536,7 +536,7 @@ impl ProbeOutcome {
     fn timed_out(registry: &ProxyRegistry, node: &Node, targets: &ProbeTargets) -> Self {
         let packet_available = registry
             .find(node.protocol())
-            .filter(|entry| (entry.descriptor.supports_udp)(node))
+            .filter(|entry| entry.descriptor.allows_udp(node))
             .and_then(|entry| entry.packet.as_ref())
             .is_some();
         let packet_result = |port| {

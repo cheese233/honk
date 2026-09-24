@@ -458,7 +458,7 @@ impl NodeRuntime {
         let transport_quality = Arc::new(crate::transport_quality::TransportQuality::default());
         Arc::new(Self {
             node: Arc::new(node.clone()),
-            udp_capable: (crate::descriptor::descriptor(node.protocol()).supports_udp)(node),
+            udp_capable: crate::descriptor::descriptor(node.protocol()).allows_udp(node),
             runtime: crate::descriptor::descriptor(node.protocol())
                 .generation_runtime
                 .build(node, false, Arc::clone(&transport_quality)),
@@ -1020,9 +1020,8 @@ impl OutboundRuntimeRegistry {
                         Arc::new(crate::transport_quality::TransportQuality::default());
                     Arc::new(NodeRuntime {
                         node: Arc::new(node.clone()),
-                        udp_capable: (crate::descriptor::descriptor(node.protocol()).supports_udp)(
-                            node,
-                        ),
+                        udp_capable: crate::descriptor::descriptor(node.protocol())
+                            .allows_udp(node),
                         runtime: crate::descriptor::descriptor(node.protocol())
                             .generation_runtime
                             .build(node, true, Arc::clone(&transport_quality)),

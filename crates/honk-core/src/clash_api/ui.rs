@@ -416,13 +416,15 @@ async fn fetch_proxied(
         honk_outbound::proxy::WarmRequirement::Session,
     )?;
     let reporter = feedback.as_ref().map(ScoreFeedback::start);
-    let result = match generation
-        .scope_dials(
+    let result = match honk_outbound::chain::with_dial_generation(
+        Arc::clone(&generation),
+        generation.scope_dials(
             entry
                 .tcp
                 .dial_runtime(runtime, addr, domain, connect_timeout),
-        )
-        .await
+        ),
+    )
+    .await
     {
         Ok(proxy) => match tokio::time::timeout(
             DOWNLOAD_TIMEOUT,

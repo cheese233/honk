@@ -62,6 +62,7 @@ pub(crate) async fn maybe_tls_wrap(
     match maybe_tls_wrap_concrete(node, tcp, connect_timeout).await? {
         MaybeTls::Tls(stream) => Ok(Box::new(crate::tls::BatchRead::new(stream))),
         MaybeTls::Plain(stream) => Ok(stream),
+        MaybeTls::Chained(stream) => Ok(stream),
     }
 }
 
@@ -71,6 +72,9 @@ pub(crate) async fn maybe_tls_wrap(
 pub(crate) enum MaybeTls {
     Tls(crate::tls::TlsStream<ObservedTcp>),
     Plain(Box<ObservedTcp>),
+    /// Already connected to the server through a front hop. There is no
+    /// `ObservedTcp` here: the socket belongs to the front's own dial.
+    Chained(Box<dyn AsyncReadWrite>),
 }
 
 pub(crate) async fn maybe_tls_wrap_concrete(
@@ -81,6 +85,9 @@ pub(crate) async fn maybe_tls_wrap_concrete(
     let tls = node.tls().unwrap();
     if !tls.alpn.is_empty() {
         node.validate_protocol()?;
+    }
+    if crate::chain::is_chained(node) {
+        return chained_server_stream(node, tcp, connect_timeout).await;
     }
     let cold = tcp.is_none();
     let initial_tcp = async {
@@ -152,6 +159,36 @@ pub(crate) async fn maybe_tls_wrap_concrete(
     }
     tcp.activate();
     Ok(MaybeTls::Plain(Box::new(tcp)))
+}
+
+/// Server stream for a chained node: connected through its front hop, then
+/// wrapped exactly like a direct dial. There is no `ObservedTcp` because the
+/// underlying socket belongs to the front's own generation-pinned dial.
+async fn chained_server_stream(
+    node: &Node,
+    tcp: Option<TcpStream>,
+    connect_timeout: std::time::Duration,
+) -> anyhow::Result<MaybeTls> {
+    if tcp.is_some() {
+        anyhow::bail!(
+            "node '{}': a chained dial cannot reuse a pooled server socket",
+            node.name
+        );
+    }
+    if crate::reality::parse_reality_config(node)?.is_some() {
+        anyhow::bail!("node '{}': REALITY cannot be chained", node.name);
+    }
+    let stream = crate::chain::connect_server(node, connect_timeout).await?;
+    let tls = node.tls().unwrap();
+    if tls.enabled {
+        let connector = crate::tls::build_connector(node)?;
+        let server_name = tls.sni.clone().unwrap_or_else(|| node.host().to_string());
+        let tls_stream = connector.connect(&server_name, stream).await?;
+        return Ok(MaybeTls::Chained(Box::new(crate::tls::BatchRead::new(
+            tls_stream,
+        ))));
+    }
+    Ok(MaybeTls::Chained(stream))
 }
 
 /// Upgrade an already-connected (optionally TLS-wrapped) stream to

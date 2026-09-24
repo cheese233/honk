@@ -678,8 +678,8 @@ impl ControlPlaneHandle {
                             .find(node.protocol())
                             .map(|entry| {
                                 (
-                                    (entry.descriptor.pool_ready_streams)(&node),
-                                    (entry.descriptor.pool_bare_tcp)(&node),
+                                    entry.descriptor.allows_pool_ready(&node),
+                                    entry.descriptor.allows_pool_bare(&node),
                                 )
                             })
                             .unwrap_or((false, false));

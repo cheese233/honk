@@ -204,15 +204,17 @@ impl honk_outbound::alive::HttpProber for ProxyHttpProber {
                 )
                 .map(|feedback| feedback.with_source(ScoreSource::Warmup))
             };
-            if let Err(error) = generation
-                .scope_dials(honk_outbound::urltest::warm_http_probe(
+            if let Err(error) = honk_outbound::chain::with_dial_generation(
+                std::sync::Arc::clone(&generation),
+                generation.scope_dials(honk_outbound::urltest::warm_http_probe(
                     &runtime,
                     entry.warmable.as_deref(),
                     connect_timeout,
                     timeout,
                     warm_feedback,
-                ))
-                .await
+                )),
+            )
+            .await
             {
                 close_ephemeral(ephemeral).await;
                 if let Some(rejection) = honk_outbound::proxy::packet_rejection(&error) {
@@ -229,8 +231,9 @@ impl honk_outbound::alive::HttpProber for ProxyHttpProber {
                 &check_url,
                 &default_probe_url,
             );
-            let result = generation
-                .scope_dials(honk_outbound::urltest::measure_http_probe(
+            let result = honk_outbound::chain::with_dial_generation(
+                std::sync::Arc::clone(&generation),
+                generation.scope_dials(honk_outbound::urltest::measure_http_probe(
                     &runtime,
                     entry.tcp.as_ref(),
                     &request,
@@ -239,8 +242,9 @@ impl honk_outbound::alive::HttpProber for ProxyHttpProber {
                     connect_timeout,
                     timeout,
                     feedback,
-                ))
-                .await;
+                )),
+            )
+            .await;
             close_ephemeral(ephemeral).await;
             match result {
                 Ok(elapsed) => honk_outbound::alive::HttpProbeResult::WarmSuccess(elapsed),
@@ -432,7 +436,7 @@ impl honk_outbound::alive::UdpProber for ProxyUdpProber {
                 };
             };
             let udp_capable =
-                (honk_outbound::descriptor::descriptor(node.protocol()).supports_udp)(&node);
+                honk_outbound::descriptor::descriptor(node.protocol()).allows_udp(&node);
             let dns_allowed = udp_capable
                 && honk_outbound::descriptor::udp_target_allowed(&node, dns_probe.port());
             let data_allowed = udp_capable

@@ -718,7 +718,7 @@ fn c11_clash_anytls_network_aliases_resolve_before_udp() {
     assert_eq!(
         nodes
             .iter()
-            .map(|node| (honk_outbound::descriptor::descriptor(node.protocol()).supports_udp)(node))
+            .map(|node| honk_outbound::descriptor::descriptor(node.protocol()).allows_udp(node))
             .collect::<Vec<_>>(),
         [true, true, true, false, true]
     );

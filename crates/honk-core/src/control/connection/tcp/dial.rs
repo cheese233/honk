@@ -248,8 +248,8 @@ impl ControlPlaneHandle {
                         .find(node.protocol())
                         .map(|entry| {
                             (
-                                (entry.descriptor.pool_ready_streams)(&node),
-                                (entry.descriptor.pool_bare_tcp)(&node),
+                                entry.descriptor.allows_pool_ready(&node),
+                                entry.descriptor.allows_pool_bare(&node),
                             )
                         })
                         .unwrap_or((false, false));
@@ -437,7 +437,7 @@ impl ControlPlaneHandle {
             .find(protocol)
             .ok_or_else(|| anyhow::anyhow!("No handler for protocol {:?}", protocol))?;
 
-        if !pool_disabled && (entry.descriptor.pool_ready_streams)(node) {
+        if !pool_disabled && entry.descriptor.allows_pool_ready(node) {
             let key =
                 ConnectionPool::ready_key(generation.generation(), node.id, target, target_domain);
             if let Some(stream) = pool.acquire_ready(&key).await {
@@ -455,7 +455,7 @@ impl ControlPlaneHandle {
             // A raw pooled TCP still needs its protocol handshake. Multiplexed
             // protocols opt out because their node runtime owns the transport.
             if !pool_disabled
-                && (entry.descriptor.pool_bare_tcp)(node)
+                && entry.descriptor.allows_pool_bare(node)
                 && let Some(tcp) = pool.acquire_tcp(&addr).await
             {
                 scope.start();

@@ -363,12 +363,15 @@ async fn urltest_node_in_generation_impl(
                 .map(|feedback| feedback.with_source(ScoreSource::Warmup))
         })
     };
-    let result = generation
-        .scope_dials(async {
-            warm_http_probe(&runtime, warmable, timeout, timeout, warm_feedback).await?;
-            urltest_request_impl(&runtime, handler, &request, timeout).await
-        })
-        .await;
+    let result = crate::chain::with_dial_generation(Arc::clone(generation), async {
+        generation
+            .scope_dials(async {
+                warm_http_probe(&runtime, warmable, timeout, timeout, warm_feedback).await?;
+                urltest_request_impl(&runtime, handler, &request, timeout).await
+            })
+            .await
+    })
+    .await;
     if let Some(guard) = guard {
         guard.close().await;
     }

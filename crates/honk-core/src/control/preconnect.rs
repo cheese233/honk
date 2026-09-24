@@ -23,7 +23,7 @@ pub(crate) fn preconnect_candidates(
     };
     fn eligible(node: &Node) -> bool {
         !matches!(node.protocol(), NodeProtocol::Direct | NodeProtocol::Block)
-            && (honk_outbound::descriptor::descriptor(node.protocol()).pool_bare_tcp)(node)
+            && honk_outbound::descriptor::descriptor(node.protocol()).allows_pool_bare(node)
     }
     let mut seen = std::collections::HashSet::new();
     let mut selected: Vec<Node> = Vec::new();

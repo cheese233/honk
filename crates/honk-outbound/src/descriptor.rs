@@ -20,7 +20,27 @@ pub struct ProtocolDescriptor {
 }
 
 impl ProtocolDescriptor {
+    /// A chained node owns no reusable server-side state this process can
+    /// pool: the front hop, not this node, owns the physical connection.
+    pub fn allows_pool_ready(&self, node: &Node) -> bool {
+        node.detour.is_none() && (self.pool_ready_streams)(node)
+    }
+
+    /// See [`Self::allows_pool_ready`].
+    pub fn allows_pool_bare(&self, node: &Node) -> bool {
+        node.detour.is_none() && (self.pool_bare_tcp)(node)
+    }
+
+    /// UDP is never chained (a QUIC/stream front cannot carry a framed UDP
+    /// association here), so a detoured leaf leaves UDP group eligibility.
+    pub fn allows_udp(&self, node: &Node) -> bool {
+        node.detour.is_none() && (self.supports_udp)(node)
+    }
+
     pub fn supports_warm(&self, node: &Node, requirement: WarmRequirement) -> bool {
+        if node.detour.is_some() {
+            return false;
+        }
         if self.protocol == NodeProtocol::VLess {
             let vless = node
                 .vless()
@@ -331,5 +351,27 @@ mod tests {
         *udp443 = Udp443Policy::Allow;
         assert!(udp_target_allowed(&node, 443));
         assert!(udp_target_allowed(&Node::default(), 443));
+    }
+
+    #[test]
+    fn detour_leaves_pool_and_udp_eligibility() {
+        let mut node =
+            honk_config::node::Node::from_share_link("ss://YWVzLTI1Ni1nY206cGFzcw@1.2.3.4:8388#ss")
+                .unwrap();
+        let ss = descriptor(NodeProtocol::SS);
+        assert!(ss.allows_pool_bare(&node));
+        assert!(ss.allows_udp(&node));
+
+        node.detour = Some("front".into());
+        assert!(!ss.allows_pool_bare(&node));
+        assert!(!ss.allows_pool_ready(&node));
+        assert!(!ss.allows_udp(&node));
+        assert!(!ss.supports_warm(&node, WarmRequirement::Session));
+
+        let mut trojan =
+            honk_config::node::Node::from_share_link("trojan://secret@example.com:443#t").unwrap();
+        assert!(descriptor(NodeProtocol::Trojan).allows_pool_ready(&trojan));
+        trojan.detour = Some("front".into());
+        assert!(!descriptor(NodeProtocol::Trojan).allows_pool_ready(&trojan));
     }
 }

@@ -487,3 +487,27 @@ async fn speculative_udp_rejects_a_shutdown_generation_before_dispatch() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn detoured_non_chainable_node_is_refused_before_dialing() {
+    let registry = ProxyRegistry::default_resolver().unwrap();
+    for link in [
+        "ss://YWVzLTI1Ni1nY206cGFzcw@127.0.0.1:1#ss",
+        "anytls://secret@127.0.0.1:1#anytls",
+        "hysteria2://secret@127.0.0.1:1#hy2",
+    ] {
+        let mut node = Node::from_share_link(link).unwrap();
+        node.detour = Some("front".into());
+        node.id = node.derive_id();
+        let error = registry
+            .dial(
+                &node,
+                "127.0.0.1:2".parse().unwrap(),
+                None,
+                Duration::from_secs(1),
+            )
+            .await
+            .expect_err("a non-chainable exit must fail closed");
+        assert!(error.to_string().contains("chain"), "{link}: {error}");
+    }
+}

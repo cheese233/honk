@@ -262,7 +262,7 @@ pub(in crate::control) fn group_datapath_alive(
             .any(|node| {
                 (domain == ProbeDomain::Tcp
                     || node.protocol() == NodeProtocol::Block
-                    || (honk_outbound::descriptor::descriptor(node.protocol()).supports_udp)(node))
+                    || honk_outbound::descriptor::descriptor(node.protocol()).allows_udp(node))
                     && alive_set.is_alive_for(node.id, domain, ipver)
             })
 }

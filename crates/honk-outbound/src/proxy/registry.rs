@@ -199,6 +199,13 @@ impl ProxyRegistry {
             .find(protocol)
             .ok_or_else(|| anyhow::anyhow!("No handler for protocol {:?}", protocol))?;
 
+        // A chain declared outside the operator validator (subscription or
+        // bare share link) must not silently connect directly.
+        if node.detour.is_some() {
+            honk_config::node::chain_exit_unsupported(node)
+                .map_err(|reason| anyhow::anyhow!("node '{}': {reason}", node.name))?;
+        }
+
         tracing::debug!(
             "Dialing {}:{} via {} ({})",
             target,
@@ -231,18 +238,25 @@ impl ProxyRegistry {
         let runtime = generation
             .get(&node_id)
             .ok_or_else(|| anyhow::anyhow!("node {node_id} is not in runtime generation"))?;
+        if runtime.node.detour.is_some() {
+            honk_config::node::chain_exit_unsupported(runtime.node.as_ref())
+                .map_err(|reason| anyhow::anyhow!("node '{}': {reason}", runtime.node.name))?;
+        }
         let protocol = runtime.node.protocol();
         let entry = self
             .find(protocol)
             .ok_or_else(|| anyhow::anyhow!("No handler for protocol {:?}", protocol))?;
-        let stream = generation
-            .scope_dials(runtime.transport_quality().scope(entry.tcp.dial_runtime(
-                runtime,
-                target,
-                target_domain,
-                connect_timeout,
-            )))
-            .await?;
+        let stream = crate::chain::with_dial_generation(Arc::clone(&generation), async {
+            generation
+                .scope_dials(runtime.transport_quality().scope(entry.tcp.dial_runtime(
+                    runtime,
+                    target,
+                    target_domain,
+                    connect_timeout,
+                )))
+                .await
+        })
+        .await?;
         if generation.is_shutdown() {
             anyhow::bail!("outbound runtime generation shut down during dial");
         }
@@ -342,7 +356,7 @@ impl ProxyRegistry {
         {
             return Err(PacketRejection::Policy.into());
         }
-        if protocol != NodeProtocol::Block && !(entry.descriptor.supports_udp)(node) {
+        if protocol != NodeProtocol::Block && !entry.descriptor.allows_udp(node) {
             anyhow::bail!("UDP not supported for protocol {}", protocol.as_str());
         }
         let packet = entry.packet.as_ref().ok_or_else(|| {

@@ -39,6 +39,9 @@ impl VLessHandler {
                     crate::proxy::transport::MaybeTls::Plain(_) => {
                         anyhow::bail!("unencrypted VLESS Vision requires TLS or REALITY");
                     }
+                    crate::proxy::transport::MaybeTls::Chained(_) => {
+                        anyhow::bail!("VLESS Vision cannot be chained");
+                    }
                 };
             return Ok(match permit {
                 Some(permit) => Box::new(crate::proxy::RuntimeOwnedIo {

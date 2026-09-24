@@ -143,7 +143,7 @@ pub(super) async fn probe_udp_dns(
     let Some(entry) = registry.find(node.protocol()) else {
         return Some(Err(ProbeFailureKind::Handler));
     };
-    if !(entry.descriptor.supports_udp)(node) {
+    if !entry.descriptor.allows_udp(node) {
         return None;
     }
     if !honk_outbound::descriptor::udp_target_allowed(node, target.port()) {
@@ -193,7 +193,7 @@ pub(super) async fn probe_udp_quic(
     let Some(entry) = registry.find(node.protocol()) else {
         return Some(Err(ProbeFailureKind::Handler));
     };
-    if !(entry.descriptor.supports_udp)(node) {
+    if !entry.descriptor.allows_udp(node) {
         return None;
     }
     if !honk_outbound::descriptor::udp_target_allowed(node, url_port) {

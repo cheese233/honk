@@ -9,6 +9,7 @@ mod address_race;
 
 pub mod alive;
 pub mod bootstrap;
+pub mod chain;
 pub mod descriptor;
 pub mod group;
 pub mod proxy;

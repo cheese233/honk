@@ -54,14 +54,17 @@ impl Socks5Handler {
         Ok(request)
     }
 
-    /// Perform full SOCKS5 handshake.
-    async fn handshake(
-        stream: &mut TcpStream,
+    /// Perform full SOCKS5 handshake over any connected stream.
+    async fn handshake<S>(
+        stream: &mut S,
         target: SocketAddr,
         target_domain: Option<&str>,
         username: Option<&str>,
         password: Option<&str>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<()>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let greeting: &[u8] = if username.is_some() && password.is_some() {
                 &[SOCKS5_VERSION, 2, METHOD_NO_AUTH, METHOD_USERNAME_PASSWORD]
@@ -533,6 +536,23 @@ impl TcpOutbound for Socks5Handler {
         target_domain: Option<&str>,
         connect_timeout: std::time::Duration,
     ) -> anyhow::Result<ProxyStream> {
+        let config = node.socks5().unwrap();
+        if node.detour.is_some() {
+            let mut stream = crate::chain::connect_server(node, connect_timeout).await?;
+            Self::handshake(
+                &mut stream,
+                target,
+                target_domain,
+                config.username.as_deref(),
+                config.password.as_deref(),
+            )
+            .await?;
+            return Ok(ProxyStream {
+                stream,
+                target_addr: target,
+                target_domain: target_domain.map(|s| s.to_string()),
+            });
+        }
         let addr = format!("{}:{}", node.host(), node.port);
         debug!("SOCKS5: connecting to {} for target {}", addr, target);
         let stream = crate::util::connect_outbound(&addr, connect_timeout).await?;

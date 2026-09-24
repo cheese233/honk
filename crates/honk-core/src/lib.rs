@@ -1112,6 +1112,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     info!("Router ready with {} compiled routes", router.route_count());
 
     let proxy_registry = std::sync::Arc::new(proxy::ProxyRegistry::default_resolver()?);
+    honk_outbound::chain::install_registry(std::sync::Arc::clone(&proxy_registry));
     info!(
         "Proxy registry ready ({} handlers)",
         proxy_registry.handler_count()
