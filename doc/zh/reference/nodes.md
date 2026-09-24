@@ -93,6 +93,7 @@ Node 模型包含下列字段。分享链接从 scheme、userinfo、authority、
 | `anytls_idle_session_check_interval` | u64? | null | 解析后的 `idle_session_check_interval` 秒数；当前运行时 janitor 周期仍固定为 30 秒 |
 | `anytls_idle_session_timeout` | u64? | null | 来自 `idle_session_timeout` 的空闲驱逐；有效默认值 30 秒 |
 | `mark` | u32? | null | 结构化模型中的出站 `SO_MARK`；不是 dae 分享链接 query |
+| `detour` | string? | null | 前置节点名称；该节点经其连接自身服务器。见[出站链式代理](#出站链式代理detour) |
 | `tags` | string[] | `[]` | 分类元数据；不是 dae 分享链接 query |
 | `subscription_id` / `group_id` | UUID? | null | 导入/运行时归属元数据 |
 | `created_at` / `updated_at` | datetime | now | 运行时元数据 |
@@ -388,7 +389,24 @@ REALITY 不使用 CA 校验或 `skip_cert_verify`。target TLS record 的缓冲�
 | `juicity://` | Juicity userinfo 与共用 QUIC/TLS query |
 | `socks5://` | SOCKS userinfo；`socks4://` 与 `socks4a://` 也导入同一种节点协议 |
 
-对于写成 `a -> b` 的链，只解析 `a`。自动名称只来自解码后的 `#fragment`、VMess `ps` 或 `{scheme}-{host}`；解析器绝不以原始 URI 或 userinfo 作为回退，因此生成名称不会泄漏凭据。显式 tag、fragment 与 `ps` 值仍由用户控制。
+对于写成 `a -> b` 的链，只解析 `a`；需要链式代理时请使用显式的 `detour=` query。自动名称只来自解码后的 `#fragment`、VMess `ps` 或 `{scheme}-{host}`；解析器绝不以原始 URI 或 userinfo 作为回退，因此生成名称不会泄漏凭据。显式 tag、fragment 与 `ps` 值仍由用户控制。
+
+## 出站链式代理（`detour`）
+
+节点可以经由另一个节点连接自身服务器，而不是直接建立 TCP 连接。前置节点由出口节点的 `detour` 指定：
+
+```dae
+node {
+    front: 'socks5://10.0.0.1:1080'
+    exit: 'trojan://secret@edge.example:443?detour=front'
+}
+```
+
+分享链接 query 接受 `detour=` 或 `chain=`；扁平/结构化模型接受 `detour`；sing-box `outbounds[].detour` 与记录式键 `proxy`、`dialer-proxy`、`underlying-proxy`、`chain` 都映射到同一字段。该值必须唯一解析到一个已声明的代理节点；组、`direct`、`block` 或重名节点都会被拒绝，操作者校验还会拒绝未知目标、自引用与环。前置节点自身也可以带 `detour`。
+
+可作为出口（其拨号能接受前置传入的服务器流）的协议是 SOCKS5、Trojan、VMess 以及不带 Vision 的 VLESS。REALITY、VLESS Vision、Shadowsocks、AnyTLS 与 QUIC 出站（Hysteria2/TUIC/Juicity）不能作为出口，因为它们的拨号持有物理连接或需要原始 socket。任意代理节点都可作为前置。
+
+链式节点不会使用连接池或预热会话，会被预连接跳过，并从 UDP 组候选中排除；经链式节点发起的 UDP 请求会按失败关闭处理，而不会绕过前置。出口服务器的域名会在本地经 bootstrap 解析，同时作为 domain 请求交给前置。`detour` 名称参与节点身份，因此重命名前置会改变出口节点的 ID 及其延迟缓存键。在没有运行时 generation 的场景（例如 `honk-tool sub`）链式拨号会失败关闭，而不是直连。
 
 ## 相关文档
 

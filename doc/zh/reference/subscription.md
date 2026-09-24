@@ -194,7 +194,7 @@ VLESS 字段会在派生节点身份前应用：
 
 SIP008 version 1/2 wrapper（`{"servers":[...]}`）及裸服务器数组会导入 Shadowsocks 的 `server`、`server_port`、`method`、`password` 和 `remarks`。空插件字段不会导致拒绝；有效的插件配置仍不受支持。
 
-sing-box 配置从 `outbounds` 导入受支持的 Shadowsocks、SOCKS5、VMess、VLESS、Trojan、Hysteria2、TUIC、Juicity 和 AnyTLS 条目。结构性 `selector`、`urltest`、`direct`、`block` 与 `dns` 条目不是代理节点。TLS/SNI、REALITY、WebSocket/gRPC、VLESS packet 选择和受支持的协议调优会通过共同的节点构建逻辑规范化。未启用 H2MUX/UoT wrapper 且没有显式 `packet_encoding` 选择其他路径时，sing-box VLESS 条目特定地默认使用 Single XUDP 并允许 UDP；这是 sing-box 导入默认值，不是 Auto 的全局含义。gRPC service name 为空或省略时保留 sing-box 的空 service，不套用 honk 的 `GunService` 默认值。Hysteria2 可以只提供 `server_ports`，以第一个跳跃端口作为名义端点。不支持的链式代理、wire 功能和认证要求不会被静默丢弃。每节点 uTLS 指纹提示不会覆盖 honk 的进程级 TLS 设置。
+sing-box 配置从 `outbounds` 导入受支持的 Shadowsocks、SOCKS5、VMess、VLESS、Trojan、Hysteria2、TUIC、Juicity 和 AnyTLS 条目。结构性 `selector`、`urltest`、`direct`、`block` 与 `dns` 条目不是代理节点。TLS/SNI、REALITY、WebSocket/gRPC、VLESS packet 选择和受支持的协议调优会通过共同的节点构建逻辑规范化。未启用 H2MUX/UoT wrapper 且没有显式 `packet_encoding` 选择其他路径时，sing-box VLESS 条目特定地默认使用 Single XUDP 并允许 UDP；这是 sing-box 导入默认值，不是 Auto 的全局含义。gRPC service name 为空或省略时保留 sing-box 的空 service，不套用 honk 的 `GunService` 默认值。Hysteria2 可以只提供 `server_ports`，以第一个跳跃端口作为名义端点。非空 `detour` 会导入为该节点的链式前置（见[节点参考](./nodes.md#出站链式代理detour)）。不支持的 wire 功能和认证要求不会被静默丢弃。每节点 uTLS 指纹提示不会覆盖 honk 的进程级 TLS 设置。
 
 在 sing-box 输入中，`network` 表示数据包网络能力，不是流传输类型；`transport.type` 选择流传输方式。`h2` 等不支持的名称会使条目被拒绝，不会被当作裸 TCP。
 
@@ -216,7 +216,7 @@ AnyTLS 记录中的 `network` 表示数据包能力，不是流传输方式。�
 
 VLESS 记录的 `packet-encoding`/`packet_encoding`/`packetencoding` 值为 `none` 或空时选择原生 UDP，`xudp` 选择 Single XUDP。重复别名必须一致，包括显式空赋值；`udp`/`udp-relay` 独立控制 packet 权限。既没有 packet encoding 也没有 `udp: true` 时，记录保持关闭 UDP；仅有 `udp: true` 时选择 Single XUDP。记录格式中有效的 `mux` 与 UoT 声明仍不受支持，不会被重新解释。
 
-受支持的记录把凭据、TLS/SNI、WebSocket/gRPC、REALITY 和已实现的协议选项映射到同一节点模型。Quantumult X 的 `obfs=wss` 同时使用 `obfs-host` 作为 WebSocket Host 和默认 TLS SNI；显式 TLS 主机名优先。SSR、不支持的插件/混淆及传输方式会被跳过，不会冒充另一种协议导入。
+受支持的记录把凭据、TLS/SNI、WebSocket/gRPC、REALITY 和已实现的协议选项映射到同一节点模型。记录式链键 `proxy`、`dialer-proxy`、`underlying-proxy`、`chain` 映射到节点的 `detour` 前置。Quantumult X 的 `obfs=wss` 同时使用 `obfs-host` 作为 WebSocket Host 和默认 TLS SNI；显式 TLS 主机名优先。SSR、不支持的插件/混淆及传输方式会被跳过，不会冒充另一种协议导入。
 
 Surge `server-cert-fingerprint-sha256` 映射到 honk 的叶证书 pin：两者都替代标准 X.509 验证。独立的 `server-cert-verify-name`、客户端证书、`sni=off` 和 Shadow TLS 无法表达，会被拒绝，不会静默丢弃（[Surge TLS 参考](https://manual.nssurge.com/policies/tls.html)）。
 
