@@ -244,7 +244,10 @@ pub(super) fn resolve_group_filters_inner(
         // literally (`name(direct)`) admits one.
         if !has_node_filter {
             if group.groups.is_empty() {
-                for node in nodes.iter().filter(|node| !is_builtin(node)) {
+                for node in nodes
+                    .iter()
+                    .filter(|node| !is_builtin(node) && !node.internal)
+                {
                     if !group.nodes.contains(&node.id) {
                         group.nodes.push(node.id);
                     }
@@ -255,6 +258,9 @@ pub(super) fn resolve_group_filters_inner(
         group.nodes.clear();
 
         for node in nodes {
+            if node.internal {
+                continue;
+            }
             let admitted = parsed_filters.iter().any(|filter| {
                 (!is_builtin(node) || filter.iter().any(|term| term.names_literally(&node.name)))
                     && filter

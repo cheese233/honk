@@ -66,6 +66,10 @@ pub struct Node {
     /// server through that node instead of a direct TCP connect. Resolved and
     /// cycle-checked by [`crate::Config::validate`]; nil means a direct dial.
     pub detour: Option<String>,
+    /// A chain front hop synthesized from a dae `link -> link` entry. Internal
+    /// nodes are dialed as fronts but are not group candidates and are hidden
+    /// from the Clash API and tooling. Never serialized.
+    pub internal: bool,
     pub mark: Option<u32>,
     pub tags: Vec<String>,
     pub subscription_id: Option<uuid::Uuid>,
@@ -88,6 +92,7 @@ impl Default for Node {
             port: 0,
             outbound: OutboundConfig::default(),
             detour: None,
+            internal: false,
             mark: None,
             tags: Vec::new(),
             subscription_id: None,

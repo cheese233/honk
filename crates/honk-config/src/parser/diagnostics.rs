@@ -70,14 +70,14 @@ impl<'a> ParserDiagnostics<'a> {
         (location.source.clone(), location.line)
     }
 
-    pub fn parse_share_link(
+    /// Parse a dae node entry, which may be a `exit -> front` chain.
+    pub fn parse_share_link_chain(
         &mut self,
         link: &str,
-    ) -> Result<crate::node::Node, crate::error::DetailedConfigError> {
+    ) -> Result<Vec<crate::node::Node>, crate::error::DetailedConfigError> {
         let source = self.source();
         let location = &self.current;
         let entry = self.entry;
-        // Node tags are not schema fields: every link diagnostic belongs to this entry.
         let locate_entry = |diagnostic: &mut DetailedDiagnostic| {
             diagnostic.source = source.clone();
             diagnostic.line = location.line;
@@ -97,7 +97,7 @@ impl<'a> ParserDiagnostics<'a> {
                     .insert(1, crate::diagnostic::SettingSegment::Index(index));
             }
         };
-        crate::node::Node::parse_share_link(link, &source, &mut |mut diagnostic| {
+        crate::node::Node::parse_share_link_chain(link, &source, &mut |mut diagnostic| {
             locate_entry(&mut diagnostic);
             self.output.push(diagnostic);
         })

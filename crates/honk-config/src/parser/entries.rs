@@ -99,13 +99,11 @@ fn parse_node_entry(
     let Some(uri) = complete_quoted_value(uri, diagnostics) else {
         return Ok(());
     };
-    match diagnostics.parse_share_link(uri.raw()) {
-        Ok(mut node) => {
-            if let Some(tag) = tag.filter(|tag| !tag.raw().is_empty()) {
-                node.name = tag.raw().to_owned();
-            }
-            nodes.push(node);
-        }
+    let tag = tag
+        .filter(|tag| !tag.raw().is_empty())
+        .map(|tag| tag.raw().to_owned());
+    let chain = match diagnostics.parse_share_link_chain(uri.raw()) {
+        Ok(chain) => chain,
         Err(error) if error.category == crate::error::ErrorCategory::UnknownProtocol => {
             return Err(super::ParseFailure::Detailed(error));
         }
@@ -118,6 +116,7 @@ fn parse_node_entry(
             error.diagnostic.severity = Severity::Warning;
             error.diagnostic.terminal = false;
             diagnostics.output.push(*error.diagnostic);
+            return Ok(());
         }
         Err(_) => {
             text.notice(
@@ -126,7 +125,20 @@ fn parse_node_entry(
                 "invalid-node-entry",
                 "node entry could not be parsed; ignored",
             );
+            return Ok(());
         }
+    };
+    let mut chain = chain;
+    if let Some(tag) = tag {
+        chain[0].name = tag;
+    }
+    for node in chain {
+        // Front hops are content-addressed, so two entries naming the same
+        // chain share one front. Exits keep their own tag and stay distinct.
+        if node.internal && nodes.iter().any(|existing| existing.id == node.id) {
+            continue;
+        }
+        nodes.push(node);
     }
     Ok(())
 }

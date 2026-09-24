@@ -92,6 +92,76 @@ impl Node {
         Ok(node)
     }
 
+    /// Parse a dae chain `exit -> front -> ...` (dae splits links on `->` and
+    /// builds right-to-left, so the left node is the exit and each node to its
+    /// right is the dial-proxy that reaches it). The front hops become
+    /// internal nodes with content-derived names so two identical chains share
+    /// one front.
+    pub(crate) fn parse_share_link_chain(
+        link: &str,
+        source: &crate::diagnostic::SourceRef,
+        emit: &mut impl FnMut(crate::diagnostic::DetailedDiagnostic),
+    ) -> Result<Vec<Node>, crate::error::DetailedConfigError> {
+        let segments: Vec<&str> = link
+            .split("->")
+            .map(str::trim)
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        if segments.len() <= 1 {
+            return Self::parse_share_link(link, source, emit).map(|node| vec![node]);
+        }
+        let mut chain = Vec::with_capacity(segments.len());
+        for segment in segments {
+            chain.push(Self::parse_share_link(segment, source, emit)?);
+        }
+        let mut detour: Option<String> = None;
+        for index in (0..chain.len()).rev() {
+            let node = &mut chain[index];
+            node.detour = detour.clone();
+            node.id = node.derive_id();
+            if index > 0 {
+                node.internal = true;
+                node.name = format!("chain-{}", &node.id.simple().to_string()[..12]);
+            }
+            detour = Some(node.name.clone());
+        }
+        Ok(chain)
+    }
+
+    /// Parse while retaining typed diagnostics for a `->` chain.
+    pub fn from_share_link_chain_with_detailed_diagnostics(
+        link: &str,
+        diagnostics: &mut Vec<crate::diagnostic::DetailedDiagnostic>,
+    ) -> Result<Vec<Node>, crate::error::DetailedConfigError> {
+        let result =
+            Self::from_share_link_chain_with_detailed_diagnostics_emit(link, &mut |diagnostic| {
+                diagnostics.push(diagnostic)
+            });
+        crate::diagnostic::report_detailed_diagnostics(diagnostics);
+        result
+    }
+
+    /// Parse a chain while emitting nonterminal diagnostics through a
+    /// caller-owned sink.
+    pub fn from_share_link_chain_with_detailed_diagnostics_emit(
+        link: &str,
+        emit: &mut impl FnMut(crate::diagnostic::DetailedDiagnostic),
+    ) -> Result<Vec<Node>, crate::error::DetailedConfigError> {
+        let source = crate::diagnostic::DiagnosticSources::new(None).root();
+        Self::parse_share_link_chain(link, &source, emit)
+    }
+
+    /// Parse a dae `exit -> front` chain into every hop node.
+    pub fn from_share_link_chain(link: &str) -> Result<Vec<Node>, ConfigError> {
+        let mut diagnostics = Vec::new();
+        let result =
+            Self::from_share_link_chain_with_detailed_diagnostics_emit(link, &mut |diagnostic| {
+                diagnostics.push(diagnostic)
+            });
+        crate::diagnostic::report_detailed_diagnostics(&diagnostics);
+        result.map_err(crate::error::DetailedConfigError::into_legacy)
+    }
+
     fn decode_share_link(
         link: &str,
         source: &crate::diagnostic::SourceRef,
@@ -147,11 +217,6 @@ impl Node {
             source,
             emit,
         )?;
-        node.detour = query
-            .get("detour")
-            .or_else(|| query.get("chain"))
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
         Ok(node)
     }
 }

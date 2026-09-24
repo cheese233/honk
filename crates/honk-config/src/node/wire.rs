@@ -693,6 +693,7 @@ impl FlatNode {
                 .take()
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
+            internal: false,
             mark: flat.mark,
             tags: flat.tags,
             subscription_id: flat.subscription_id,

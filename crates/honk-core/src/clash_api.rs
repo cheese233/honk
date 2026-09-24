@@ -511,7 +511,9 @@ fn build_global_proxy_info(config: &Config, global_selection: &str) -> serde_jso
         push_unique(&group.name);
     }
     for node in &config.nodes {
-        push_unique(&node.name);
+        if !node.internal {
+            push_unique(&node.name);
+        }
     }
     let now = all
         .iter()
@@ -537,6 +539,9 @@ async fn get_proxies(State(s): State<Arc<ClashState>>) -> Json<serde_json::Value
     // dashboards resolve group members through these entries to display node
     // names and per-node delay history (real Clash behaves the same way).
     for node in &config.nodes {
+        if node.internal {
+            continue;
+        }
         proxies.insert(node.name.clone(), build_node_proxy_info(node, &s.alive_set));
     }
 

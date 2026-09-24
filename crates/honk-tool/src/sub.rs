@@ -148,7 +148,11 @@ struct ProbeOutcome {
 
 pub async fn run(args: SubArgs) -> anyhow::Result<()> {
     configure_tls(&args)?;
-    let mut nodes = load_nodes(&args).await?;
+    let mut nodes: Vec<Node> = load_nodes(&args)
+        .await?
+        .into_iter()
+        .filter(|node| !node.internal)
+        .collect();
     if args.limit > 0 {
         nodes.truncate(args.limit);
     }

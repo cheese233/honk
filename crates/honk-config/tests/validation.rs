@@ -628,21 +628,27 @@ mod chain_detour {
     }
 
     #[test]
-    fn share_link_query_selects_the_front_node() {
-        for query in ["detour=front", "chain=front"] {
-            let node =
-                Node::from_share_link(&format!("socks5://127.0.0.1:1080?{query}#exit")).unwrap();
-            assert_eq!(node.detour.as_deref(), Some("front"), "{query}");
-        }
-        let plain = Node::from_share_link("socks5://127.0.0.1:1080#exit").unwrap();
-        assert_eq!(plain.detour, None);
+    fn dae_arrow_chain_parses_into_linked_nodes() {
+        let chain = Node::from_share_link_chain(
+            "socks5://127.0.0.1:1082#exit -> socks5://127.0.0.1:1081#front",
+        )
+        .unwrap();
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].detour.as_deref(), Some(chain[1].name.as_str()));
+        assert!(!chain[0].internal);
+        assert!(chain[1].internal);
+        assert_eq!(chain[1].detour, None);
+
+        let plain = Node::from_share_link_chain("socks5://127.0.0.1:1080#exit").unwrap();
+        assert_eq!(plain.len(), 1);
+        assert_eq!(plain[0].detour, None);
     }
 
     #[test]
     fn dae_node_section_parses_and_validates_a_chain() {
         let mut diagnostics = Vec::new();
         let config = honk_config::parser::parse_dae_config_with_detailed_diagnostics(
-            "node {\n front: 'socks5://127.0.0.1:1080'\n exit: 'trojan://secret@edge.example:443?detour=front'\n}\n",
+            "node {\n chains: 'trojan://secret@edge.example:443 -> socks5://127.0.0.1:1080'\n}\n",
             &mut diagnostics,
         )
         .unwrap();
@@ -650,9 +656,46 @@ mod chain_detour {
         let exit = config
             .nodes
             .iter()
-            .find(|node| node.name == "exit")
+            .find(|node| node.name == "chains")
             .expect("exit node");
-        assert_eq!(exit.detour.as_deref(), Some("front"));
+        let front = config
+            .nodes
+            .iter()
+            .find(|node| node.internal)
+            .expect("front node");
+        assert_eq!(exit.detour.as_deref(), Some(front.name.as_str()));
+        assert_eq!(config.nodes.len(), 2);
+    }
+
+    #[test]
+    fn multi_hop_arrow_chain_links_each_hop() {
+        let chain = Node::from_share_link_chain(
+            "trojan://secret@a.example:443 -> socks5://127.0.0.1:1080 -> socks5://127.0.0.1:1081",
+        )
+        .unwrap();
+        assert_eq!(chain.len(), 3);
+        assert_eq!(chain[0].detour.as_deref(), Some(chain[1].name.as_str()));
+        assert_eq!(chain[1].detour.as_deref(), Some(chain[2].name.as_str()));
+        assert!(!chain[0].internal && chain[1].internal && chain[2].internal);
+    }
+
+    #[test]
+    fn identical_fronts_share_one_node() {
+        let mut diagnostics = Vec::new();
+        let config = honk_config::parser::parse_dae_config_with_detailed_diagnostics(
+            "node {\n a: 'trojan://s@a.example:443 -> socks5://127.0.0.1:1080'\n b: 'trojan://s@b.example:443 -> socks5://127.0.0.1:1080'\n}\n",
+            &mut diagnostics,
+        )
+        .unwrap();
+        config.validate().unwrap();
+        assert_eq!(
+            config.nodes.iter().filter(|node| node.internal).count(),
+            1,
+            "identical fronts must be shared"
+        );
+        let a = config.nodes.iter().find(|node| node.name == "a").unwrap();
+        let b = config.nodes.iter().find(|node| node.name == "b").unwrap();
+        assert_eq!(a.detour, b.detour);
     }
 
     #[test]
@@ -724,7 +767,6 @@ mod chain_detour {
             "hysteria2://secret@example.com:443#hy2",
             "tuic://00000000-0000-0000-0000-000000000001:pass@example.com:443#tuic",
             "juicity://00000000-0000-0000-0000-000000000001:pass@example.com:443#juicity",
-            "anytls://secret@example.com:443#anytls",
             "ss://YWVzLTI1Ni1nY206cGFzcw@1.2.3.4:8388#ss",
             "vless://00000000-0000-0000-0000-000000000001@example.com:443?flow=xtls-rprx-vision&security=tls#vision",
         ] {

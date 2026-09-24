@@ -22,7 +22,8 @@ pub(crate) fn preconnect_candidates(
         count
     };
     fn eligible(node: &Node) -> bool {
-        !matches!(node.protocol(), NodeProtocol::Direct | NodeProtocol::Block)
+        !node.internal
+            && !matches!(node.protocol(), NodeProtocol::Direct | NodeProtocol::Block)
             && honk_outbound::descriptor::descriptor(node.protocol()).allows_pool_bare(node)
     }
     let mut seen = std::collections::HashSet::new();

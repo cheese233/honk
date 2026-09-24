@@ -666,20 +666,23 @@ fn parse_uri_subscription(
             emit(outcome);
             continue;
         }
-        let result = Node::from_share_link_with_detailed_diagnostics_emit(uri, &mut |diagnostic| {
-            emit(IndexedOutcome {
-                ordinal,
-                line: Some(ordinal),
-                path: "entries",
-                kind: IndexedOutcomeKind::Diagnostic(diagnostic),
+        let result =
+            Node::from_share_link_chain_with_detailed_diagnostics_emit(uri, &mut |diagnostic| {
+                emit(IndexedOutcome {
+                    ordinal,
+                    line: Some(ordinal),
+                    path: "entries",
+                    kind: IndexedOutcomeKind::Diagnostic(diagnostic),
+                });
             });
-        });
         match result {
-            Ok(mut node) => {
-                node.subscription_id = subscription_id;
-                let mut outcome = IndexedOutcome::node(ordinal, "entries", node);
-                outcome.line = Some(ordinal);
-                emit(outcome);
+            Ok(nodes) => {
+                for mut node in nodes {
+                    node.subscription_id = subscription_id;
+                    let mut outcome = IndexedOutcome::node(ordinal, "entries", node);
+                    outcome.line = Some(ordinal);
+                    emit(outcome);
+                }
             }
             Err(error) => {
                 let mut diagnostic = *error.diagnostic;
