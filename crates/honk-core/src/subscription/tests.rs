@@ -125,6 +125,43 @@ fn test_parse_base64_without_padding() {
 }
 
 #[test]
+fn subscription_chain_front_reuses_identical_standalone_node() {
+    // A provider that lists one server both standalone (`#meow`) and as the
+    // front of a chain. Identity ignores the name, so admission keeps the
+    // standalone node and the synthesized `chain-<id>` hop is dropped; the
+    // exit's detour must then name the same content id so the resolver reuses
+    // the surviving node.
+    let body = "vless://00000000-0000-4000-8000-000000000001@[2605:db8::1]:443?security=tls#meow\n\
+                socks5://user:pass@216.98.253.158:6201 -> vless://00000000-0000-4000-8000-000000000001@[2605:db8::1]:443?security=tls";
+    let nodes = parse_subscription_content(
+        &Subscription {
+            sub_type: SubscriptionType::Simple,
+            ..Default::default()
+        },
+        body,
+    )
+    .unwrap();
+    let standalone = nodes
+        .iter()
+        .find(|node| node.name == "meow")
+        .expect("standalone node admitted");
+    let exit = nodes
+        .iter()
+        .find(|node| node.protocol() == NodeProtocol::Socks5)
+        .expect("chained exit admitted");
+    let detour = exit.detour.as_deref().expect("exit carries a front");
+    assert_eq!(
+        detour,
+        honk_config::share_link::chain_node_name(&standalone.id),
+        "the exit's front must name the surviving standalone node by content id"
+    );
+    assert!(
+        !nodes.iter().any(|node| node.name == detour),
+        "the deduplicated hop must not be admitted under its chain name"
+    );
+}
+
+#[test]
 fn test_parse_base64_skips_unsupported() {
     let uris = ["socks5://192.168.1.1:1080#Valid", "unknown://host:1234"];
     let joined = uris.join("\n");

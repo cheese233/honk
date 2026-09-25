@@ -159,6 +159,11 @@ fn resolve_front(
         }
         return Ok(front.node.id);
     }
+    // A synthesized front hop is named `chain-<full content id>`. Import
+    // admission de-duplicates by content identity and may keep an identical
+    // standalone node under a different name (for example, a subscription that
+    // lists the same server both alone and as a chain front), dropping the
+    // `chain-` hop. Reuse the surviving identical node named by that id.
     if let Some(leaf) = group_front(front_name) {
         return generation
             .get(&leaf.id)
@@ -168,6 +173,11 @@ fn resolve_front(
                     "detour group '{front_name}' selected a node outside the current runtime generation"
                 )
             });
+    }
+    if let Some(front_id) = honk_config::share_link::chain_node_id(front_name)
+        && let Some(runtime) = generation.get(&front_id)
+    {
+        return Ok(runtime.node.id);
     }
     anyhow::bail!("detour target '{front_name}' is not a declared node or group")
 }

@@ -28,6 +28,26 @@ use crate::options::vocab::{optional_text, stream_transport, vmess_cipher};
 
 mod options;
 
+/// Prefix of a synthesized chain-front hop name. The remainder is the hop's
+/// full 32-hex content id so a de-duplicated hop can be recovered exactly.
+pub const CHAIN_NODE_PREFIX: &str = "chain-";
+
+/// Name of a synthesized chain-front hop: the full content id, not a prefix of
+/// it. Import admission de-duplicates by identity, so resolution must be able
+/// to recover the surviving identical node without ambiguity.
+pub fn chain_node_name(id: &uuid::Uuid) -> String {
+    format!("{CHAIN_NODE_PREFIX}{}", id.simple())
+}
+
+/// Content id encoded in a synthesized chain-front name, if `name` is one.
+pub fn chain_node_id(name: &str) -> Option<uuid::Uuid> {
+    let hex = name.strip_prefix(CHAIN_NODE_PREFIX)?;
+    if hex.len() != 32 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    uuid::Uuid::parse_str(hex).ok().filter(|id| !id.is_nil())
+}
+
 impl Node {
     /// Parse a proxy share link (e.g. `ss://...`, `trojan://...`) into a [`Node`].
     /// A chain describes several hops; only the first is parsed.
@@ -121,7 +141,7 @@ impl Node {
             node.id = node.derive_id();
             if index > 0 {
                 node.internal = true;
-                node.name = format!("chain-{}", &node.id.simple().to_string()[..12]);
+                node.name = chain_node_name(&node.id);
             }
             detour = Some(node.name.clone());
         }

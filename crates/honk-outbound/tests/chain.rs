@@ -323,3 +323,66 @@ async fn group_front_resolves_to_its_leaf() {
         .expect("a group front must resolve its leaf");
     assert!(front_seen.lock().unwrap().contains(&exit_addr.to_string()));
 }
+
+/// A subscription that lists one server both standalone and as a chain front
+/// de-duplicates them by content identity and keeps the standalone name, so
+/// the synthesized `chain-<id>` hop disappears. The exit must reuse the
+/// surviving node named by the full content id embedded in that name.
+#[tokio::test]
+async fn deduplicated_chain_front_resolves_by_content_id() {
+    let echo = echo_server().await;
+    let (exit_addr, _exit_seen) = socks5_server().await;
+    let (front_addr, front_seen) = socks5_server().await;
+    let front = socks5_node("meow", front_addr.port());
+    let exit = chained_node(
+        "exit",
+        exit_addr.port(),
+        &honk_config::share_link::chain_node_name(&front.id),
+    );
+    let generation = Arc::new(OutboundRuntimeRegistry::build(&[front, exit.clone()]).unwrap());
+    let registry = ProxyRegistry::default_resolver().unwrap();
+
+    let proxy = registry
+        .dial_runtime(generation, exit.id, echo, None, Duration::from_secs(5))
+        .await
+        .expect("a de-duplicated front hop must resolve by content id");
+    let mut stream: Box<dyn AsyncReadWrite> = proxy.stream;
+    stream.write_all(b"cid").await.unwrap();
+    let mut buf = [0u8; 3];
+    stream.read_exact(&mut buf).await.unwrap();
+    assert_eq!(&buf, b"cid");
+    assert!(front_seen.lock().unwrap().contains(&exit_addr.to_string()));
+}
+
+/// A `chain-` name that names no node in the generation must still fail closed
+/// rather than fall through to a direct dial.
+#[tokio::test]
+async fn unresolvable_chain_front_fails_closed() {
+    let (exit_addr, _exit_seen) = socks5_server().await;
+    let front = socks5_node("meow", 1);
+    let missing = format!("chain-{}", "f".repeat(32));
+    assert_ne!(missing, honk_config::share_link::chain_node_name(&front.id));
+    let exit = chained_node("exit", exit_addr.port(), &missing);
+    let generation = Arc::new(OutboundRuntimeRegistry::build(&[front, exit.clone()]).unwrap());
+    let registry = ProxyRegistry::default_resolver().unwrap();
+
+    let error = match registry
+        .dial_runtime(
+            generation,
+            exit.id,
+            "127.0.0.1:9".parse().unwrap(),
+            None,
+            Duration::from_secs(1),
+        )
+        .await
+    {
+        Ok(_) => panic!("an unresolvable chain front must not dial"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("is not a declared node or group"),
+        "{error}"
+    );
+}

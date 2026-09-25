@@ -404,7 +404,7 @@ node {
 }
 ```
 
-Every side of `->` is a share link, exactly as in dae: `exit: 'trojan://... -> socks5://... -> socks5://...'` reaches the Trojan server through the first SOCKS5 hop and then the second. The tagged node is the exit; each front hop becomes an internal node with a content-derived name (`chain-<id>`), is not a group candidate, and is hidden from the Clash API and `honk-tool`. Two chains that share the same front link share one front node.
+Every side of `->` is a share link, exactly as in dae: `exit: 'trojan://... -> socks5://... -> socks5://...'` reaches the Trojan server through the first SOCKS5 hop and then the second. The tagged node is the exit; each front hop becomes an internal node named `chain-<full content id>`, is not a group candidate, and is hidden from the Clash API and `honk-tool`. Two chains that share the same front link share one front node. When a declared node or subscription entry has the same content identity as a synthesized front hop (for example a subscription that lists one server both standalone and as a chain front), the first admitted entry survives and the later duplicate is dropped; the exit still reaches that surviving node, which is reused as the front.
 
 The structured flat model, sing-box `outbounds[].detour`, and record keys `proxy`, `dialer-proxy`, `underlying-proxy`, and `chain` name an already-declared node instead of a link. The target must resolve to exactly one declared node, group, or builtin: a group resolves to its current TCP leaf at dial time, `direct` is a direct dial, `block` blocks the server connection, and a duplicated node name or a cycle is rejected. A front may itself have a detour.
 
