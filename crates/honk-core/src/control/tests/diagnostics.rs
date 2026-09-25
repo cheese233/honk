@@ -122,9 +122,10 @@ async fn c14_startup_snapshot_follows_body_and_collection_admission() {
     let mut config = Config::default();
     config.global.nfqueue_enable = false;
     config.subscriptions.push(provider);
-    let mut supervisor = SubscriptionSupervisor::prepare(&mut config, None, warning("static", 1))
-        .await
-        .unwrap();
+    let mut supervisor =
+        SubscriptionSupervisor::prepare(&mut config, None, warning("static", 1), None)
+            .await
+            .unwrap();
     config.validate_assembled().unwrap();
     let cp = fixture(config, supervisor.take_startup_diagnostics()).await;
     let active = snapshot(&cp).await;

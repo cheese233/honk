@@ -867,3 +867,59 @@ mod chain_detour {
         assert_eq!(code(&config), "invalid-chain-target");
     }
 }
+
+mod subscriptions {
+    use honk_config::{Config, parser::parse_dae_config_with_detailed_diagnostics};
+
+    fn parse(input: &str) -> Config {
+        let mut diagnostics = Vec::new();
+        parse_dae_config_with_detailed_diagnostics(input, &mut diagnostics).unwrap()
+    }
+
+    #[test]
+    fn accepts_absolute_and_legacy_relative_file_subscriptions() {
+        for entry in [
+            "local: 'file:///etc/honk/local.sub'",
+            "relative: 'file://relative/path/to/mysub.sub'",
+        ] {
+            let config = parse(&format!("subscription {{\n {entry}\n}}\n"));
+            config
+                .validate()
+                .unwrap_or_else(|error| panic!("{entry}: {error:?}"));
+        }
+    }
+
+    #[test]
+    fn rejects_other_schemes_and_malformed_file_urls() {
+        for entry in [
+            "fetch: 'ftp://example.com/sub'",
+            "legacy: 'http-file://example.com/sub'",
+            "query: 'file:///etc/honk/local.sub?token=secret-token'",
+            "fragment: 'file:///etc/honk/local.sub#fragment'",
+            "empty: 'file://'",
+            "root: 'file:///'",
+        ] {
+            let error = parse(&format!("subscription {{\n {entry}\n}}\n"))
+                .validate_detailed()
+                .unwrap_err();
+            assert_eq!(error.diagnostic.code, "invalid-config-value", "{entry}");
+            assert_eq!(
+                error.diagnostic.setting.to_string(),
+                "subscriptions[1].url",
+                "{entry}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejection_does_not_echo_the_subscription_url() {
+        let mut diagnostics = Vec::new();
+        let config = parse_dae_config_with_detailed_diagnostics(
+            "subscription {\n query: 'file:///etc/honk/local.sub?token=secret-token'\n}\n",
+            &mut diagnostics,
+        )
+        .unwrap();
+        let error = config.validate_detailed().unwrap_err();
+        assert!(!format!("{diagnostics:?}{error:?}").contains("secret-token"));
+    }
+}

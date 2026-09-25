@@ -10,7 +10,7 @@ use honk_config::diagnostic::{
 };
 use honk_config::error::{DetailedConfigError, ErrorCategory};
 use honk_config::node::Node;
-use honk_config::subscription::Subscription;
+use honk_config::subscription::{Subscription, SubscriptionLocation, subscription_location};
 use honk_config::types::SubscriptionType;
 
 mod clash;
@@ -361,19 +361,53 @@ async fn read_capped_body(mut response: reqwest::Response) -> anyhow::Result<Vec
     Ok(body)
 }
 
+/// A `file:` subscription is read with the same ceiling as a downloaded body.
+async fn read_local_subscription(path: &std::path::Path) -> anyhow::Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt as _;
+
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|error| anyhow::anyhow!("read local subscription {}: {error}", path.display()))?;
+    let mut body: Vec<u8> = Vec::new();
+    file.take(MAX_SUBSCRIPTION_BYTES as u64 + 1)
+        .read_to_end(&mut body)
+        .await
+        .map_err(|error| anyhow::anyhow!("read local subscription {}: {error}", path.display()))?;
+    if body.len() > MAX_SUBSCRIPTION_BYTES {
+        anyhow::bail!("subscription body exceeds {MAX_SUBSCRIPTION_BYTES} bytes");
+    }
+    Ok(body)
+}
+
 /// Manager for fetching and parsing proxy subscriptions.
 pub struct SubscriptionManager {
     client: reqwest::Client,
+    /// Directory that a relative `file:` subscription path resolves against.
+    base_dir: Option<std::path::PathBuf>,
 }
 
 impl SubscriptionManager {
     pub fn new() -> anyhow::Result<Self> {
+        Self::with_base_dir(None)
+    }
+
+    /// Build a manager whose relative `file:` paths resolve against `base_dir`.
+    pub(crate) fn with_base_dir(base_dir: Option<std::path::PathBuf>) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .dns_resolver(std::sync::Arc::new(BootstrapDnsResolve))
             .redirect(subscription_redirect_policy())
             .build()?;
-        Ok(Self { client })
+        Ok(Self { client, base_dir })
+    }
+
+    fn resolve_local_path(&self, path: std::path::PathBuf) -> std::path::PathBuf {
+        if path.is_relative()
+            && let Some(base_dir) = &self.base_dir
+        {
+            return base_dir.join(path);
+        }
+        path
     }
 
     /// Fetch a subscription URL and parse its contents into a list of nodes.
@@ -400,20 +434,38 @@ impl SubscriptionManager {
         store: Option<&SubscriptionStore>,
         diagnostics: &mut Vec<DetailedDiagnostic>,
     ) -> anyhow::Result<Vec<Node>> {
-        let mut request = self
-            .client
-            .get(&sub.url)
-            .header("User-Agent", effective_subscription_user_agent(sub));
+        let body = match subscription_location(&sub.url).map_err(anyhow::Error::msg)? {
+            SubscriptionLocation::Local(path) => {
+                read_local_subscription(&self.resolve_local_path(path)).await?
+            }
+            SubscriptionLocation::Remote => {
+                let mut request = self
+                    .client
+                    .get(&sub.url)
+                    .header("User-Agent", effective_subscription_user_agent(sub));
 
-        for header in &sub.headers {
-            request = request.header(&header.key, &header.value);
-        }
+                for header in &sub.headers {
+                    request = request.header(&header.key, &header.value);
+                }
 
-        let response = request.send().await.map_err(reqwest::Error::without_url)?;
-        let response = response
-            .error_for_status()
-            .map_err(reqwest::Error::without_url)?;
-        let body = read_capped_body(response).await?;
+                let response = request.send().await.map_err(reqwest::Error::without_url)?;
+                let response = response
+                    .error_for_status()
+                    .map_err(reqwest::Error::without_url)?;
+                read_capped_body(response).await?
+            }
+        };
+        self.accept_body(sub, store, body, diagnostics).await
+    }
+
+    /// Accept one body, remote or local, through the shared parse and persistence path.
+    async fn accept_body(
+        &self,
+        sub: &Subscription,
+        store: Option<&SubscriptionStore>,
+        body: Vec<u8>,
+        diagnostics: &mut Vec<DetailedDiagnostic>,
+    ) -> anyhow::Result<Vec<Node>> {
         let content = finish_attempt(
             String::from_utf8(body).map_err(|_| {
                 subscription_error(

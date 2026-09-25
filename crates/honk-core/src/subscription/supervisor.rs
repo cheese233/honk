@@ -351,10 +351,11 @@ impl SubscriptionSupervisor {
         config: &mut Config,
         store: Option<SubscriptionStore>,
         static_diagnostics: Vec<honk_config::diagnostic::DetailedDiagnostic>,
+        base_dir: Option<std::path::PathBuf>,
     ) -> anyhow::Result<Self> {
         let authorizations = SubscriptionAuthorizations::new(&config.subscriptions)?;
         let initial = authorizations.committed(&config.subscriptions);
-        let manager = Arc::new(SubscriptionManager::new()?);
+        let manager = Arc::new(SubscriptionManager::with_base_dir(base_dir)?);
         let mut startup_diagnostics = DiagnosticBuckets {
             static_diagnostics,
             providers: Vec::new(),

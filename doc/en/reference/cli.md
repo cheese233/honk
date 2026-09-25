@@ -130,7 +130,7 @@ honk-tool sub <url|file|-> [--target HOST:PORT] [--url TEST_URL]
 
 | Argument / option | Default | Meaning |
 | --- | --- | --- |
-| `<url\|file\|->` | Required | HTTP(S) subscription URL, an existing local subscription file, or `-`. `-` reads exactly one HTTP(S) subscription URL from stdin; it does not read a subscription body from stdin. |
+| `<url\|file\|->` | Required | HTTP(S) or `file:` subscription URL, an existing local subscription file, or `-`. `-` reads exactly one HTTP(S) subscription URL from stdin; it does not read a subscription body from stdin. |
 | `--target HOST:PORT` | `cp.cloudflare.com:443` | Host for the family probes' HTTPS request URL (TLS SNI and Host header), and host and port for QUIC. Without `--v4-target`/`--v6-target` address overrides, family probes resolve this host and use this port. `--udp-check` selects the UDP DNS probe target separately. |
 | `--udp-check HOST[:PORT]` | `dns.google:53`, `8.8.8.8`, `2001:4860:4860::8888` | UDP DNS check targets, defaulting to the engine list in `honk-config`. Repeat the flag or use commas. The first IP/socket-address literal is used; otherwise the first entry is resolved only for eligible UDP DNS probes. An omitted port means `53`. |
 | `--url TEST_URL` | `https://www.gstatic.com/generate_204` | Proxied URLTest target. |

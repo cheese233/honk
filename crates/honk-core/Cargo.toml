@@ -127,6 +127,7 @@ nix = { workspace = true, features = ["signal"] }
 tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 tokio-tungstenite.workspace = true
+url.workspace = true
 rcgen.workspace = true
 # rustls: test-only — mock TLS/QUIC servers prove interop with the BoringSSL client stack
 tokio-rustls.workspace = true

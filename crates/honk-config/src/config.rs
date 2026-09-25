@@ -848,15 +848,14 @@ impl Config {
                     "subscription URL must not be empty",
                 ));
             }
-            if !subscription.url.starts_with("http://") && !subscription.url.starts_with("https://")
-            {
+            if let Err(message) = crate::subscription::subscription_location(&subscription.url) {
                 return Err(config_validation_error(
                     source,
                     SettingPath::new("subscriptions")
                         .index(index + 1)
                         .field("url"),
                     "invalid-config-value",
-                    "subscription URL must use http:// or https://",
+                    message,
                 ));
             }
         }

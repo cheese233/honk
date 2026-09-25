@@ -803,9 +803,18 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     } else {
         None
     };
-    let mut subscription_supervisor =
-        subscription::SubscriptionSupervisor::prepare(&mut config, subscription_store, diagnostics)
-            .await?;
+    let subscription_base_dir = cli
+        .config
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(|parent| std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf()));
+    let mut subscription_supervisor = subscription::SubscriptionSupervisor::prepare(
+        &mut config,
+        subscription_store,
+        diagnostics,
+        subscription_base_dir,
+    )
+    .await?;
     let startup_diagnostics = subscription_supervisor.take_startup_diagnostics();
 
     // Resolve group filters into concrete node IDs. This must run for every

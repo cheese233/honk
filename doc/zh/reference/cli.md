@@ -130,7 +130,7 @@ honk-tool sub <url|file|-> [--target HOST:PORT] [--url TEST_URL]
 
 | 参数 | 默认值 | 含义 |
 | --- | --- | --- |
-| `<url\|file\|->` | 必填 | HTTP(S) 订阅 URL、已有本地订阅文件，或 `-`。`-` 从 stdin 读取且只接受一个 HTTP(S) 订阅 URL；不会从 stdin 读取订阅正文。 |
+| `<url\|file\|->` | 必填 | HTTP(S) 或 `file:` 订阅 URL、已有本地订阅文件，或 `-`。`-` 从 stdin 读取且只接受一个 HTTP(S) 订阅 URL；不会从 stdin 读取订阅正文。 |
 | `--target HOST:PORT` | `cp.cloudflare.com:443` | 主机用于地址族探测的 HTTPS 请求 URL（TLS SNI 和 Host 标头）；主机和端口用于 QUIC 探测。未指定 `--v4-target`/`--v6-target` 地址覆盖时，地址族探测解析此主机并使用此端口。UDP DNS 探测目标由 `--udp-check` 单独指定。 |
 | `--udp-check HOST[:PORT]` | `dns.google:53`、`8.8.8.8`、`2001:4860:4860::8888` | UDP DNS 检查目标，默认取自 `honk-config` 中的引擎列表。可重复指定或用逗号分隔。优先采用首个可解析为 IP 地址或套接字地址的目标，否则仅在节点支持 UDP DNS 探测时解析列表首项。省略端口时使用 `53`。 |
 | `--url TEST_URL` | `https://www.gstatic.com/generate_204` | 经代理的 URLTest 目标。 |

@@ -557,6 +557,70 @@ async fn subscription_store_recovers_last_valid_fetch() {
 }
 
 #[tokio::test]
+async fn local_file_subscription_reads_and_persists_like_a_fetch() {
+    let temp = tempfile::tempdir().unwrap();
+    let body_path = temp.path().join("local.sub");
+    let body = "socks5://127.0.0.1:1080#local";
+    fs::write(&body_path, body).unwrap();
+    let store = SubscriptionStore::open(temp.path().join(SUBSCRIPTION_STORE_DIR)).unwrap();
+    let sub = Subscription {
+        name: "local".into(),
+        url: url::Url::from_file_path(&body_path).unwrap().to_string(),
+        ..Subscription::default()
+    };
+
+    let nodes = SubscriptionManager::new()
+        .unwrap()
+        .fetch_and_store(&sub, Some(&store))
+        .await
+        .unwrap();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].name, "local");
+    assert_eq!(fs::read_to_string(store.path_for(&sub)).unwrap(), body);
+}
+
+#[tokio::test]
+async fn local_file_subscription_resolves_relative_to_the_configured_base() {
+    let temp = tempfile::tempdir().unwrap();
+    let relative = temp.path().join("relative");
+    fs::create_dir(&relative).unwrap();
+    fs::write(
+        relative.join("local.sub"),
+        "socks5://127.0.0.1:1080#relative",
+    )
+    .unwrap();
+    let sub = Subscription {
+        name: "local".into(),
+        url: "file://relative/local.sub".into(),
+        ..Subscription::default()
+    };
+
+    let manager = SubscriptionManager::with_base_dir(Some(temp.path().to_path_buf())).unwrap();
+    let nodes = manager.fetch(&sub).await.unwrap();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].name, "relative");
+}
+
+#[tokio::test]
+async fn local_file_subscription_refuses_a_body_past_the_cap() {
+    let temp = tempfile::tempdir().unwrap();
+    let body_path = temp.path().join("large.sub");
+    fs::write(&body_path, vec![b'a'; MAX_SUBSCRIPTION_BYTES + 1]).unwrap();
+    let sub = Subscription {
+        name: "local".into(),
+        url: url::Url::from_file_path(&body_path).unwrap().to_string(),
+        ..Subscription::default()
+    };
+
+    let error = SubscriptionManager::new()
+        .unwrap()
+        .fetch(&sub)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("exceeds"), "{error}");
+}
+
+#[tokio::test]
 async fn subscription_store_skips_rejected_legacy_candidates() {
     let temp = tempfile::tempdir().unwrap();
     let preferred = temp.path().join("preferred");

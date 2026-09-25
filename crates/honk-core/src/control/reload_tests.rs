@@ -1000,7 +1000,7 @@ async fn reload_dispatch_assigns_worker_revision_and_accepts_only_that_revision(
     let mut cp = test_cp().await;
     let mut startup = Config::default();
     let mut supervisor =
-        crate::subscription::SubscriptionSupervisor::prepare(&mut startup, None, Vec::new())
+        crate::subscription::SubscriptionSupervisor::prepare(&mut startup, None, Vec::new(), None)
             .await
             .unwrap();
     let (command_tx, mut commands) = tokio::sync::mpsc::channel(4);

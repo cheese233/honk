@@ -28,7 +28,9 @@ For a quoted head, only a colon immediately after the closing quote (allowing wh
 
 A tagless entry uses its URL host as its name: `'https://example.com/sub'` becomes `example.com`. A URL without a parseable host leaves the name empty and fails validation. Name uniqueness is not enforced: an explicit `example.com` tag and a tagless URL on that host share the same `subtag(example.com)` filter, which selects nodes from both subscriptions. Host-derived naming applies only to dae; JSON, YAML, and TOML still require `name`.
 
-Tagless text without `://` is ignored. Explicitly tagged entries still reach validation, which requires a non-empty name and an HTTP(S) URL. `file://`, `http-file://`, and `https-file://` remain unsupported.
+Tagless text without `://` is ignored. Explicitly tagged entries still reach validation, which requires a non-empty name and a URL that is `http://`, `https://`, or `file:`. `http-file://` and `https-file://` remain unsupported.
+
+A `file:` subscription reads a local body instead of fetching one. `file:///etc/honk/local.sub` and `file://localhost/etc/honk/local.sub` are absolute paths; dae's legacy `file://relative/path/to/mysub.sub` is relative, takes the URL authority as its first segment, and resolves against the config file's directory (the process working directory when the configuration has no file, such as a string-parsed config). Credentials, a query, a fragment, and a URL with no file name (`file://`, `file:///`) are rejected at validation, so an accepted `file:` URL always names one local file. An absolute `file:` URL has no host, so a tagless entry derives an empty name and still needs a tag. A local body is parsed and persisted exactly like a downloaded one; it uses no network, redirects, or configured User-Agent and headers.
 
 On entry lines, `#` starts a comment outside matching quotes at the start of the statement or immediately after an ASCII space or tab. In a bare URL, a glued `#` remains data, including after parentheses: `https://example.com/sub?filter=(hk)#token`. Quote a User-Agent containing a spaced `#`: `'https://example.com/sub'('agent # build')`; without UA quotes, the comment cuts off the suffix.
 
@@ -44,7 +46,7 @@ Quote-error and block rules are listed in the [dialect reference](./dialect.md).
 | --- | --- | --- | --- | --- |
 | `id` | UUID | random UUID | No | Runtime subscription identity; SIGHUP preserves it when the fetch identity (URL + configured `ua` + headers) matches an existing subscription. |
 | `name` | string | `""` | Yes, as the tag; otherwise the URL host | Display tag and the value used by group `subtag(...)` filters. |
-| `url` | string | `""` | Yes | HTTP(S) fetch URL. |
+| `url` | string | `""` | Yes | HTTP(S) fetch URL, or a `file:` URL read from local disk. |
 | `sub_type` | enum | `simple` | No | Body parser: `simple`, `clash`, `sip008`, or `custom`. |
 | `update_interval` | u64 | `86400` | Yes, as block `interval` | Periodic refresh interval in seconds; `0` disables periodic refresh. |
 | `user_agent` | string or null | `honk/<version>` | Yes, as `(UA)` or block `ua` | Optional `User-Agent` override; otherwise requests identify as `honk/<version>`. |
@@ -63,11 +65,11 @@ The internal body-selector behavior is:
 | `sip008` | SIP008 `servers` objects or a bare server array; not a share-link list. |
 | `custom` | The same format detection as `simple`. |
 
-`honk-tool sub` uses the same parser for downloaded bodies and local files.
+`honk-tool sub` uses the same parser for downloaded bodies and local files, and reads a `file:` URL through the same classifier as the runtime.
 
 ## Fetch, persistence, and recovery
 
-`global.store_subscribe` defaults to `true`. When enabled, the runtime opens a private subscription store and fetches every enabled subscription immediately. Requests identify as `honk/<version>` unless `user_agent` supplies an override. A non-zero `update_interval` schedules later refreshes.
+`global.store_subscribe` defaults to `true`. When enabled, the runtime opens a private subscription store and fetches every enabled subscription immediately. Requests identify as `honk/<version>` unless `user_agent` supplies an override. A non-zero `update_interval` schedules later refreshes. A local `file:` read sends no request, so its `user_agent` and `headers` participate only in the fetch identity, not in reading the body, and the read follows symlinks with the process's ordinary filesystem permissions; the store's ownership, no-follow, and permission-tightening rules cover only the store directory and its cache files.
 
 | Property | Current behavior |
 | --- | --- |
@@ -75,8 +77,8 @@ The internal body-selector behavior is:
 | Legacy locations | Prefer an existing `/var/share/honk/.sub` (`LEGACY_DATA_DIR`), then an existing `./.sub` when the configured store is absent. Unusable legacy locations are skipped; a new preferred store is created only when no legacy candidate can be opened. A custom `data_dir` follows the same order. No store is moved or deleted automatically; migrate it explicitly when ready. |
 | Permissions and trust | The store directory is opened once without following a final symlink and retained as a file descriptor. An existing directory must be owned by the process's effective UID and must not be group- or other-writable; an unsafe directory is refused without changing its permissions. A safe owned directory is tightened to `0700`. Cache files are opened relative to that descriptor with no-follow and nonblocking flags, then accepted only when they are regular, effective-UID-owned, and not group- or other-writable. New files use `0600`; reads preserve existing file permissions so already-private read-only caches can be restored. Renaming or replacing the original path after opening cannot redirect store reads or writes. |
 | Filename | URL-safe Base64 of a SHA-256 hash over the length-delimited URL, configured user-agent override (empty when unset or empty), and ordered header key/value pairs, plus `.sub`. The versioned default request UA is intentionally not part of the key, so default subscriptions retain their cache across upgrades. The request identity is not exposed in plaintext. |
-| Write boundary | After HTTP success and body acceptance, persist the complete raw response, including rejected entries. A descriptor-relative temporary file is synced, renamed atomically within the retained directory, and followed by a directory sync. |
-| Redirects | At most 5 hops. A redirect from `https` to another scheme fails the fetch, as does one to a loopback, private, link-local, or unspecified literal address that the configured URL did not itself use. A hostname resolving to such an address is not detected. |
+| Write boundary | After HTTP success or a local read, and body acceptance, persist the complete raw body, including rejected entries. A descriptor-relative temporary file is synced, renamed atomically within the retained directory, and followed by a directory sync. |
+| Redirects | At most 5 hops. A redirect from `https` to another scheme fails the fetch, as does one to a loopback, private, link-local, or unspecified literal address that the configured URL did not itself use. A hostname resolving to such an address is not detected. A `file:` read has no redirects or address policy. |
 | Body size | At most 8 MiB, enforced while reading rather than after the body is buffered. |
 
 Subscription bodies and the nodes created from them remain runtime state; neither is written back into the dae configuration.
@@ -87,7 +89,7 @@ On SIGHUP, subscriptions with the same fetch identity (URL + configured `ua` + h
 
 Failure handling preserves a usable runtime rather than clearing it:
 
-- HTTP, invalid UTF-8 encoding, parse, or no-usable-node failure publishes no replacement nodes and performs no write, so the active nodes and last valid stored body remain. Accepted bodies are persisted byte-for-byte, without repairing encoding.
+- HTTP, local read, invalid UTF-8 encoding, parse, or no-usable-node failure publishes no replacement nodes and performs no write, so the active nodes and last valid stored body remain. Accepted bodies are persisted byte-for-byte, without repairing encoding.
 - A persistence-write failure is non-fatal after parsing: the newly parsed nodes are still returned for publication, while the atomic path never installs a partially written body. The next restart can therefore restore whichever complete valid body remains on disk.
 - An unsupported or malformed node is skipped individually. The shared node builder's warning includes a one-based proxy index and a static rejection reason, never the raw record or its credentials. The whole body fails only when no usable nodes remain; an empty result never clears the previous generation.
 
